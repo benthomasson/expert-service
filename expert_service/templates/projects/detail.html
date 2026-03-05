@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — Expert Service{% endblock %}
+{% block content %}
+<hgroup>
+    <h1>{{ project.name }}</h1>
+    <p>{{ project.domain }}</p>
+</hgroup>
+
+<h3>Pipeline Status</h3>
+<div class="pipeline-steps">
+    <span class="pipeline-step {{ 'done' if stats.sources > 0 else 'pending' }}">Fetch ({{ stats.sources }})</span>
+    <span class="pipeline-step {{ 'done' if stats.entries > 0 else 'pending' }}">Summarize ({{ stats.entries }})</span>
+    <span class="pipeline-step {{ 'done' if stats.claims > 0 else 'pending' }}">Beliefs ({{ stats.claims }})</span>
+    <span class="pipeline-step {{ 'done' if stats.assessments > 0 else 'pending' }}">Assess ({{ stats.assessments }})</span>
+</div>
+
+<h3>Stats</h3>
+<div class="stats-grid">
+    <div class="stat-card"><div class="value">{{ stats.sources }}</div><div class="label">Sources</div></div>
+    <div class="stat-card"><div class="value">{{ stats.entries }}</div><div class="label">Entries</div></div>
+    <div class="stat-card"><div class="value">{{ stats.claims }}</div><div class="label">Beliefs (IN)</div></div>
+    <div class="stat-card"><div class="value">{{ stats.nogoods }}</div><div class="label">Nogoods</div></div>
+</div>
+
+<h3>Actions</h3>
+<div class="grid">
+    <a href="/projects/{{ project.id }}/ingest" role="button" class="outline">Add Sources</a>
+    <a href="/projects/{{ project.id }}/beliefs/propose" role="button" class="outline">Propose Beliefs</a>
+    <a href="/projects/{{ project.id }}/beliefs/review" role="button" class="outline">Review Beliefs</a>
+</div>
+
+<h3>Recent Entries</h3>
+{% if entries %}
+<table>
+    <thead><tr><th>Topic</th><th>Title</th><th>Date</th></tr></thead>
+    <tbody>
+        {% for e in entries[:10] %}
+        <tr>
+            <td><code>{{ e.topic }}</code></td>
+            <td>{{ e.title or '—' }}</td>
+            <td>{{ e.created_at[:10] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No entries yet. <a href="/projects/{{ project.id }}/ingest">Add sources</a> to get started.</p>
+{% endif %}
+{% endblock %}

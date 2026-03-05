@@ -1,0 +1,8 @@
+{
+    "dependencies": [".", "langchain-anthropic", "langchain-google-genai"],
+    "graphs": {
+        "ingest": "./expert_service/graphs/ingest.py:ingest_graph",
+        "beliefs": "./expert_service/graphs/beliefs.py:beliefs_graph",
+        "assessment": "./expert_service/graphs/assessment.py:assessment_graph"
+    }
+}
