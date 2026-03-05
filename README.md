@@ -113,7 +113,7 @@ expert-service/
 │   │   ├── models.py           #   SQLAlchemy models
 │   │   └── connection.py       #   Async + sync engines
 │   ├── llm/                    # LLM integration
-│   │   ├── provider.py         #   ChatModel factory (Anthropic, Google)
+│   │   ├── provider.py         #   ChatModel factory (Vertex AI)
 │   │   └── prompts.py          #   Prompt templates
 │   └── templates/              # Jinja2 + HTMX + Pico CSS
 ├── langgraph.json              # LangGraph Platform deployment
@@ -149,15 +149,23 @@ Full-text search via PostgreSQL GIN indexes on entries and claims.
 
 ## Configuration
 
+Uses **Vertex AI** for all LLM access (same credentials as agents-python). Authenticate with:
+
+```bash
+gcloud auth application-default login
+```
+
 Environment variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` | `postgresql+asyncpg://expert:expert_dev@localhost:5432/expert_service` | Async DB connection |
-| `DATABASE_URL_SYNC` | `postgresql://expert:expert_dev@localhost:5432/expert_service` | Sync DB (graphs + checkpointer) |
-| `ANTHROPIC_API_KEY` | — | For Claude models |
-| `GOOGLE_API_KEY` | — | For Gemini models |
-| `DEFAULT_MODEL` | `claude-sonnet-4-20250514` | Default LLM |
+| `GOOGLE_CLOUD_PROJECT` | — | GCP project for Vertex AI |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI region (Gemini) |
+| `DEFAULT_MODEL` | `gemini-2.5-pro` | Default LLM |
+| `DATABASE_URL` | `postgresql+asyncpg://...localhost.../expert_service` | Async DB connection |
+| `DATABASE_URL_SYNC` | `postgresql://...localhost.../expert_service` | Sync DB (graphs + checkpointer) |
+
+Claude models automatically use `us-east5` (Anthropic on Vertex AI).
 
 ## Related Projects
 

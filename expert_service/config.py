@@ -14,9 +14,10 @@ class Settings(BaseModel):
         "DATABASE_URL_SYNC",
         "postgresql://expert:expert_dev@localhost:5432/expert_service",
     )
-    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
-    google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
-    default_model: str = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-20250514")
+    # Vertex AI configuration (shared with agents-python)
+    google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+    google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+    default_model: str = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
 
 
 settings = Settings()

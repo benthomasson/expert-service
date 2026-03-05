@@ -1,5 +1,5 @@
 {
-    "dependencies": [".", "langchain-anthropic", "langchain-google-genai"],
+    "dependencies": [".", "langchain-google-vertexai"],
     "graphs": {
         "ingest": "./expert_service/graphs/ingest.py:ingest_graph",
         "beliefs": "./expert_service/graphs/beliefs.py:beliefs_graph",
