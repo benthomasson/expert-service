@@ -5,6 +5,7 @@ Auth: gcloud auth application-default login
 """
 
 from langchain_google_vertexai import ChatVertexAI
+from langchain_google_vertexai.model_garden import ChatAnthropicVertex
 
 from expert_service.config import settings
 
@@ -17,15 +18,16 @@ def get_chat_model(model: str | None = None):
 
     Both Gemini and Claude are accessed through Vertex AI,
     reusing the same GCP project and ADC credentials as agents-python.
+    Claude uses ChatAnthropicVertex (Anthropic publisher), Gemini uses ChatVertexAI.
     """
     model = model or settings.default_model
 
     if "claude" in model:
-        return ChatVertexAI(
+        return ChatAnthropicVertex(
             model_name=model,
             project=settings.google_cloud_project,
             location=CLAUDE_LOCATION,
-            max_output_tokens=4096,
+            max_tokens=4096,
         )
     elif "gemini" in model:
         return ChatVertexAI(
