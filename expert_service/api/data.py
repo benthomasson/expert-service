@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -131,3 +132,98 @@ async def search(
         "entries": [dict(r._mapping) for r in entry_results.all()],
         "claims": [dict(r._mapping) for r in claim_results.all()],
     }
+
+
+# --- Import endpoints ---
+
+
+class EntryImport(BaseModel):
+    id: str
+    topic: str
+    title: str | None = None
+    content: str
+    path: str | None = None
+
+
+class EntriesImportRequest(BaseModel):
+    entries: list[EntryImport]
+
+
+class ClaimImport(BaseModel):
+    id: str
+    text: str
+    status: str = "IN"
+    source: str | None = None
+    source_hash: str | None = None
+
+
+class ClaimsImportRequest(BaseModel):
+    claims: list[ClaimImport]
+
+
+@router.post("/import/entries")
+async def import_entries(
+    project_id: UUID,
+    data: EntriesImportRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk import entries from a file-based expert repo."""
+    imported = 0
+    skipped = 0
+
+    for e in data.entries:
+        # Check if already exists
+        existing = await session.execute(
+            select(Entry.id).where(Entry.project_id == project_id, Entry.id == e.id)
+        )
+        if existing.scalar_one_or_none() is not None:
+            skipped += 1
+            continue
+
+        entry = Entry(
+            id=e.id,
+            project_id=project_id,
+            topic=e.topic,
+            title=e.title,
+            content=e.content,
+            metadata_={"imported_from": e.path} if e.path else None,
+        )
+        session.add(entry)
+        imported += 1
+
+    await session.commit()
+    return {"imported": imported, "skipped": skipped}
+
+
+@router.post("/import/beliefs")
+async def import_beliefs(
+    project_id: UUID,
+    data: ClaimsImportRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk import beliefs/claims from a file-based expert repo."""
+    imported = 0
+    skipped = 0
+
+    for c in data.claims:
+        existing = await session.execute(
+            select(Claim.id).where(Claim.project_id == project_id, Claim.id == c.id)
+        )
+        if existing.scalar_one_or_none() is not None:
+            skipped += 1
+            continue
+
+        claim = Claim(
+            id=c.id,
+            project_id=project_id,
+            text=c.text,
+            status=c.status,
+            source=c.source,
+            source_hash=c.source_hash,
+            review_status="accepted",  # Already reviewed in file-based system
+        )
+        session.add(claim)
+        imported += 1
+
+    await session.commit()
+    return {"imported": imported, "skipped": skipped}
