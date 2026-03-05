@@ -15,11 +15,11 @@ def make_tools(project_id: UUID) -> list:
 
     @tool
     def search_knowledge(query: str) -> str:
-        """Search entries and beliefs by keyword. Use this first to find relevant information before reading full entries."""
+        """Search entries and beliefs by keyword. Returns matching entries with content snippets and matching beliefs with full text. Use read_entry to get full content of a specific entry."""
         with get_sync_session() as session:
-            # Search entries via FTS
+            # Search entries via FTS — include content snippet
             entry_rows = session.execute(
-                select(Entry.id, Entry.title, Entry.topic)
+                select(Entry.id, Entry.title, Entry.topic, Entry.content)
                 .where(
                     Entry.project_id == project_id,
                     text(
@@ -28,7 +28,7 @@ def make_tools(project_id: UUID) -> list:
                     ),
                 )
                 .params(q=query)
-                .limit(10)
+                .limit(5)
             ).all()
 
             # Search claims via FTS
@@ -44,7 +44,12 @@ def make_tools(project_id: UUID) -> list:
 
         results = {
             "entries": [
-                {"id": r.id, "title": r.title, "topic": r.topic} for r in entry_rows
+                {
+                    "id": r.id,
+                    "topic": r.topic,
+                    "snippet": r.content[:300] + "..." if len(r.content) > 300 else r.content,
+                }
+                for r in entry_rows
             ],
             "claims": [
                 {"id": r.id, "text": r.text, "status": r.status} for r in claim_rows

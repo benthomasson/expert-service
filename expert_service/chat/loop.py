@@ -10,7 +10,7 @@ from langchain_core.messages import ToolMessage
 from expert_service.chat.tools import make_tools
 from expert_service.llm.provider import get_chat_model
 
-MAX_TOOL_ROUNDS = 10
+MAX_TOOL_ROUNDS = 5
 
 
 def _extract_text(content) -> str:
