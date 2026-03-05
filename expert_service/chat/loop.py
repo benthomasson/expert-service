@@ -10,7 +10,7 @@ from langchain_core.messages import ToolMessage
 from expert_service.chat.tools import make_tools
 from expert_service.llm.provider import get_chat_model
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 10
 
 
 def _extract_text(content) -> str:
@@ -46,12 +46,13 @@ async def chat_stream(
     llm = get_chat_model(model).bind_tools(tools)
 
     for _ in range(MAX_TOOL_ROUNDS):
-        # Stream LLM response
+        # Collect full response (buffer text — only stream on final round)
         full = None
+        buffered_text = []
         async for chunk in llm.astream(messages):
             text = _extract_text(chunk.content) if chunk.content else ""
             if text:
-                yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+                buffered_text.append(text)
             full = chunk if full is None else full + chunk
 
         if full is None:
@@ -60,11 +61,13 @@ async def chat_stream(
         # Add AI message to conversation
         messages.append(full)
 
-        # Check for tool calls
+        # If no tool calls, this is the final response — stream the buffered text
         if not full.tool_calls:
+            for text in buffered_text:
+                yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
             break
 
-        # Execute tool calls
+        # Tool calls — emit tool indicators (suppress intermediate text)
         for tc in full.tool_calls:
             yield (
                 f"event: tool_call\n"

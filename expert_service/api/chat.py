@@ -24,7 +24,9 @@ Guidelines:
 - Cite entry IDs or belief IDs when referencing specific knowledge.
 - When information is partially available, share what you found and note what's missing.
 - Be concise and direct in your answers.
-- When listing beliefs, format them clearly with their IDs."""
+- When listing beliefs, format them clearly with their IDs.
+
+IMPORTANT: Do NOT narrate your tool usage. Do not say things like "Let me search..." or "I'll look that up...". Just call the tools silently and then provide your answer once you have the information. The user can see which tools you called."""
 
 
 class ChatRequest(BaseModel):
