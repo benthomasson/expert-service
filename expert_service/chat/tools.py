@@ -7,7 +7,8 @@ from langchain_core.tools import tool
 from sqlalchemy import select, text
 
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Claim, Entry, Source
+from expert_service.db.models import Claim, Embedding, Entry, Source
+from expert_service.embeddings import embed_query
 
 
 def _extract_match_context(content: str, pattern: str, context_chars: int = 200) -> str:
@@ -224,4 +225,35 @@ def make_tools(project_id: UUID) -> list:
             return f"No exact matches for '{pattern}'."
         return json.dumps(results, indent=2)
 
-    return [search_knowledge, read_entry, list_entries, list_beliefs, read_source, grep_content]
+    @tool
+    def semantic_search(query: str) -> str:
+        """Find conceptually related content using semantic similarity. Use this when search_knowledge returns no results, or when the question uses different phrasing than the source text."""
+        query_vec = embed_query(query)
+        with get_sync_session() as session:
+            rows = session.execute(
+                text(
+                    "SELECT source_table, source_id, label, "
+                    "1 - (embedding <=> CAST(:qvec AS vector)) AS similarity "
+                    "FROM embeddings "
+                    "WHERE project_id = :pid "
+                    "ORDER BY embedding <=> CAST(:qvec AS vector) "
+                    "LIMIT 8"
+                ),
+                {"qvec": str(query_vec), "pid": str(project_id)},
+            ).all()
+
+        results = [
+            {
+                "type": r.source_table,
+                "id": r.source_id,
+                "label": r.label,
+                "similarity": round(r.similarity, 3),
+            }
+            for r in rows
+            if r.similarity >= 0.3
+        ]
+        if not results:
+            return f"No semantically similar content found for '{query}'."
+        return json.dumps(results, indent=2)
+
+    return [search_knowledge, read_entry, list_entries, list_beliefs, read_source, grep_content, semantic_search]

@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -127,3 +128,15 @@ class PipelineRun(Base):
     error = Column(Text)
 
     project = relationship("Project", back_populates="pipeline_runs")
+
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    source_table = Column(String, nullable=False)
+    source_id = Column(String, nullable=False)
+    label = Column(String)
+    embedding = Column(Vector(384), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

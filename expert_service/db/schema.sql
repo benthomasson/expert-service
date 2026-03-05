@@ -1,6 +1,7 @@
 -- Expert Service Schema (PostgreSQL 16)
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector";
 
 CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -80,6 +81,16 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS embeddings (
+    id SERIAL PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_table TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    label TEXT,
+    embedding vector(384) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Full-text search indexes
 CREATE INDEX IF NOT EXISTS idx_entries_fts ON entries
     USING gin(to_tsvector('english', coalesce(title, '') || ' ' || content));
@@ -93,3 +104,4 @@ CREATE INDEX IF NOT EXISTS idx_entries_topic ON entries(project_id, topic);
 CREATE INDEX IF NOT EXISTS idx_claims_project ON claims(project_id);
 CREATE INDEX IF NOT EXISTS idx_claims_status ON claims(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id);

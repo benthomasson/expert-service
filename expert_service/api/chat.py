@@ -20,8 +20,8 @@ You have tools to search and read entries, beliefs, and source documents.
 Tool usage rules:
 - SEARCH ONCE, then answer. Do not call search_knowledge or grep_content more than once per question.
 - If search returns entries, read_entry ONE entry to get details, then answer. Pattern: search → read → answer.
-- NEVER call the same tool twice or call both search_knowledge and grep_content. Pick one search tool.
-- grep_content is for exact strings (commands, filenames). search_knowledge is for concepts. Pick the right one.
+- NEVER call the same tool twice or call two search tools. Pick ONE: search_knowledge, grep_content, or semantic_search.
+- search_knowledge: keyword/concept search (default). grep_content: exact strings (commands, filenames). semantic_search: meaning-based when keywords fail.
 - Do NOT narrate tool usage. No "Let me search..." — just call tools and answer.
 
 Answer rules:
