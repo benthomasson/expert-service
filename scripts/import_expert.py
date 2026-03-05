@@ -72,6 +72,38 @@ def parse_beliefs(beliefs_path: Path) -> list[dict]:
     return claims
 
 
+def find_sources(sources_dir: Path) -> list[dict]:
+    """Find all source markdown files and parse them."""
+    sources = []
+
+    for md_file in sorted(sources_dir.rglob("*.md")):
+        content = md_file.read_text()
+        slug = md_file.stem
+
+        # Extract URL from YAML frontmatter
+        url = None
+        fm_match = re.match(r"^---\n(.*?)\n---\n", content, re.DOTALL)
+        if fm_match:
+            for line in fm_match.group(1).split("\n"):
+                if line.startswith("source:"):
+                    url = line.replace("source:", "").strip()
+
+        # Count words (excluding frontmatter)
+        body = content
+        if fm_match:
+            body = content[fm_match.end():]
+        word_count = len(body.split())
+
+        sources.append({
+            "slug": slug,
+            "url": url,
+            "content": content,
+            "word_count": word_count,
+        })
+
+    return sources
+
+
 def find_entries(entries_dir: Path) -> list[dict]:
     """Find all entry markdown files and parse them."""
     entries = []
@@ -134,7 +166,26 @@ def main():
             print(f"Error creating project: {resp.text}")
             sys.exit(1)
 
-    # 2. Import entries
+    # 2. Import sources
+    sources_dir = repo / "sources"
+    if sources_dir.is_dir():
+        sources = find_sources(sources_dir)
+        print(f"\nImporting {len(sources)} sources...")
+
+        resp = client.post(
+            f"/api/projects/{project_id}/import/sources",
+            json={"sources": sources},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+            print(f"  Imported: {result.get('imported', 0)}, Skipped: {result.get('skipped', 0)}")
+        else:
+            print(f"  Error: {resp.status_code} {resp.text}")
+    else:
+        print(f"No sources directory at {sources_dir}")
+
+    # 3. Import entries
     entries_dir = repo / "entries"
     if entries_dir.is_dir():
         entries = find_entries(entries_dir)
@@ -153,7 +204,7 @@ def main():
     else:
         print(f"No entries directory at {entries_dir}")
 
-    # 3. Import beliefs
+    # 4. Import beliefs
     beliefs_path = repo / "beliefs.md"
     if beliefs_path.is_file():
         claims = parse_beliefs(beliefs_path)
@@ -172,7 +223,7 @@ def main():
     else:
         print(f"No beliefs.md at {beliefs_path}")
 
-    # 4. Import nogoods
+    # 5. Import nogoods
     nogoods_path = repo / "nogoods.md"
     if nogoods_path.is_file():
         print(f"\nNogoods file found at {nogoods_path} (import not yet implemented)")

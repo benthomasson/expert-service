@@ -137,6 +137,17 @@ async def search(
 # --- Import endpoints ---
 
 
+class SourceImport(BaseModel):
+    slug: str
+    url: str | None = None
+    content: str
+    word_count: int | None = None
+
+
+class SourcesImportRequest(BaseModel):
+    sources: list[SourceImport]
+
+
 class EntryImport(BaseModel):
     id: str
     topic: str
@@ -159,6 +170,38 @@ class ClaimImport(BaseModel):
 
 class ClaimsImportRequest(BaseModel):
     claims: list[ClaimImport]
+
+
+@router.post("/import/sources")
+async def import_sources(
+    project_id: UUID,
+    data: SourcesImportRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk import sources from a file-based expert repo."""
+    imported = 0
+    skipped = 0
+
+    for s in data.sources:
+        existing = await session.execute(
+            select(Source.id).where(Source.project_id == project_id, Source.slug == s.slug)
+        )
+        if existing.scalar_one_or_none() is not None:
+            skipped += 1
+            continue
+
+        source = Source(
+            project_id=project_id,
+            slug=s.slug,
+            url=s.url,
+            content=s.content,
+            word_count=s.word_count,
+        )
+        session.add(source)
+        imported += 1
+
+    await session.commit()
+    return {"imported": imported, "skipped": skipped}
 
 
 @router.post("/import/entries")
