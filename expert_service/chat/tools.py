@@ -10,6 +10,23 @@ from expert_service.db.connection import get_sync_session
 from expert_service.db.models import Claim, Entry, Source
 
 
+def _extract_match_context(content: str, pattern: str, context_chars: int = 200) -> str:
+    """Extract text around the first match of pattern in content."""
+    lower_content = content.lower()
+    lower_pattern = pattern.lower()
+    idx = lower_content.find(lower_pattern)
+    if idx == -1:
+        return content[:context_chars] + "..."
+    start = max(0, idx - context_chars // 2)
+    end = min(len(content), idx + len(pattern) + context_chars // 2)
+    snippet = content[start:end]
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(content):
+        snippet = snippet + "..."
+    return snippet
+
+
 def make_tools(project_id: UUID) -> list:
     """Create tools scoped to a specific project. The LLM never sees the project UUID."""
 
@@ -144,4 +161,67 @@ def make_tools(project_id: UUID) -> list:
             indent=2,
         )
 
-    return [search_knowledge, read_entry, list_entries, list_beliefs, read_source]
+    @tool
+    def grep_content(pattern: str) -> str:
+        """Exact text search (case-insensitive) across entries and sources. Use this when search_knowledge misses results due to word stemming, or to find exact terms, commands, filenames, or configuration values."""
+        with get_sync_session() as session:
+            like_pattern = f"%{pattern}%"
+
+            # Search entries
+            entry_rows = session.execute(
+                select(Entry.id, Entry.topic, Entry.content)
+                .where(
+                    Entry.project_id == project_id,
+                    Entry.content.ilike(like_pattern),
+                )
+                .limit(5)
+            ).all()
+
+            # Search sources
+            source_rows = session.execute(
+                select(Source.slug, Source.url, Source.content)
+                .where(
+                    Source.project_id == project_id,
+                    Source.content.ilike(like_pattern),
+                )
+                .limit(5)
+            ).all()
+
+            # Search claims
+            claim_rows = session.execute(
+                select(Claim.id, Claim.text, Claim.status)
+                .where(
+                    Claim.project_id == project_id,
+                    Claim.text.ilike(like_pattern),
+                )
+                .limit(10)
+            ).all()
+
+        results = {
+            "entries": [
+                {
+                    "id": r.id,
+                    "topic": r.topic,
+                    "snippet": _extract_match_context(r.content, pattern, 200),
+                }
+                for r in entry_rows
+            ],
+            "sources": [
+                {
+                    "slug": r.slug,
+                    "url": r.url,
+                    "snippet": _extract_match_context(r.content, pattern, 200),
+                }
+                for r in source_rows
+            ],
+            "claims": [
+                {"id": r.id, "text": r.text, "status": r.status}
+                for r in claim_rows
+            ],
+        }
+        total = len(results["entries"]) + len(results["sources"]) + len(results["claims"])
+        if total == 0:
+            return f"No exact matches for '{pattern}'."
+        return json.dumps(results, indent=2)
+
+    return [search_knowledge, read_entry, list_entries, list_beliefs, read_source, grep_content]
