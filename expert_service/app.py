@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from expert_service.api import projects, pipeline, data
+from expert_service.api import projects, pipeline, data, chat
 from expert_service.db.connection import get_session
 from expert_service.db.models import Assessment, Claim, Entry, Nogood, Project, Source
 
@@ -20,6 +20,7 @@ app = FastAPI(title="Expert Service", version="0.1.0")
 app.include_router(projects.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
+app.include_router(chat.router)
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -128,6 +129,18 @@ async def project_detail(
         "project": {"id": project_id, "name": project.name, "domain": project.domain},
         "stats": stats,
         "entries": entries,
+    })
+
+
+@app.get("/projects/{project_id}/chat", response_class=HTMLResponse)
+async def chat_page(request: Request, project_id: UUID, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        return HTMLResponse("Project not found", status_code=404)
+    return templates.TemplateResponse("chat/chat.html", {
+        "request": request,
+        "project": {"id": project_id, "name": project.name, "domain": project.domain},
     })
 
 
