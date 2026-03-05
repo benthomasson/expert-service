@@ -17,7 +17,7 @@
     .message.assistant { background: var(--pico-card-background-color); margin-right: auto; }
     .message .role { font-size: 0.7rem; font-weight: bold; text-transform: uppercase; margin-bottom: 0.25rem; color: var(--pico-muted-color); }
     .message .content { white-space: pre-wrap; word-break: break-word; }
-    .tool-indicator { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; padding: 0.25rem 1rem; }
+    .tool-indicator { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; padding: 0.25rem 1rem; margin-right: auto; max-width: 85%; }
     .chat-input { display: flex; gap: 0.5rem; }
     .chat-input input { flex: 1; margin-bottom: 0; }
     .chat-input button { margin-bottom: 0; white-space: nowrap; }
@@ -58,6 +58,11 @@ document.getElementById('chat-input').addEventListener('keydown', (e) => {
     }
 });
 
+function scrollToBottom() {
+    const messages = document.getElementById('messages');
+    messages.scrollTop = messages.scrollHeight;
+}
+
 function appendMessage(role, text) {
     const messages = document.getElementById('messages');
     const div = document.createElement('div');
@@ -65,7 +70,7 @@ function appendMessage(role, text) {
     div.innerHTML = `<div class="role">${role}</div><div class="content"></div>`;
     div.querySelector('.content').textContent = text;
     messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
+    scrollToBottom();
     return div.querySelector('.content');
 }
 
@@ -75,7 +80,7 @@ function appendToolIndicator(text) {
     div.className = 'tool-indicator';
     div.textContent = text;
     messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
+    scrollToBottom();
 }
 
 async function sendMessage() {
@@ -89,7 +94,9 @@ async function sendMessage() {
     document.getElementById('send-btn').setAttribute('aria-busy', 'true');
 
     appendMessage('user', message);
-    const contentEl = appendMessage('assistant', '');
+
+    // Don't create assistant bubble yet — wait for first token
+    let contentEl = null;
 
     try {
         const response = await fetch(`/api/projects/${projectId}/chat`, {
@@ -128,9 +135,12 @@ async function sendMessage() {
                         } else if (eventType === 'done') {
                             // Stream complete
                         } else if (data.type === 'token') {
+                            // Create assistant bubble on first token
+                            if (!contentEl) {
+                                contentEl = appendMessage('assistant', '');
+                            }
                             contentEl.textContent += data.content;
-                            document.getElementById('messages').scrollTop =
-                                document.getElementById('messages').scrollHeight;
+                            scrollToBottom();
                         }
                     } catch (e) {
                         // Skip malformed JSON
@@ -140,6 +150,9 @@ async function sendMessage() {
             }
         }
     } catch (err) {
+        if (!contentEl) {
+            contentEl = appendMessage('assistant', '');
+        }
         contentEl.textContent = `Error: ${err.message}`;
     }
 
