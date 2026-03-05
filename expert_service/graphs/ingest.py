@@ -139,7 +139,8 @@ def summarize_batch(state: IngestState) -> dict:
 
     # Run summarization (calls LLM for each source)
     model = state.get("model")
-    entries = run_summarize(source_dicts, model=model)
+    domain = state.get("domain", "general")
+    entries = run_summarize(source_dicts, domain=domain, model=model)
 
     # Insert entries into DB
     entries_created = state.get("entries_created", 0)

@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: expert
       POSTGRES_PASSWORD: expert_dev
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./expert_service/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
@@ -17,8 +17,12 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://expert:expert_dev@postgres:5432/expert_service
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DATABASE_URL_SYNC: postgresql+psycopg://expert:expert_dev@postgres:5432/expert_service
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp/application_default_credentials.json
+    volumes:
+      - ~/.config/gcloud/application_default_credentials.json:/gcp/application_default_credentials.json:ro
     depends_on:
       - postgres
 

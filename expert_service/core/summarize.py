@@ -34,11 +34,12 @@ def extract_title(summary: str, fallback: str) -> str:
     return fallback.replace("-", " ").title()
 
 
-def summarize_source(content: str, model: str | None = None) -> str:
+def summarize_source(content: str, domain: str = "general", model: str | None = None) -> str:
     """Summarize a single source document using LLM.
 
     Args:
         content: Source document markdown content (frontmatter stripped).
+        domain: Domain context for the summary.
         model: Model name to use.
 
     Returns:
@@ -48,7 +49,7 @@ def summarize_source(content: str, model: str | None = None) -> str:
     if len(content) > 30000:
         content = content[:30000] + "\n\n[Truncated — original was longer]"
 
-    prompt = SUMMARIZE.format(content=content)
+    prompt = SUMMARIZE.format(content=content, domain=domain)
     chat_model = get_chat_model(model)
     response = chat_model.invoke(prompt)
     return response.content
@@ -56,6 +57,7 @@ def summarize_source(content: str, model: str | None = None) -> str:
 
 def summarize_batch(
     sources: list[dict],
+    domain: str = "general",
     model: str | None = None,
     on_progress: callable = None,
 ) -> list[dict]:
@@ -63,6 +65,7 @@ def summarize_batch(
 
     Args:
         sources: List of {id, slug, content} dicts.
+        domain: Domain context for summaries.
         model: Model name to use.
         on_progress: Callback(source_slug, status, count).
 
@@ -79,7 +82,7 @@ def summarize_batch(
             continue
 
         try:
-            summary = summarize_source(content, model)
+            summary = summarize_source(content, domain=domain, model=model)
         except Exception as e:
             if on_progress:
                 on_progress(source["slug"], "error", len(entries))

@@ -12,7 +12,7 @@ class Settings(BaseModel):
     # Sync URL for LangGraph checkpointer (uses psycopg, not asyncpg)
     database_url_sync: str = os.getenv(
         "DATABASE_URL_SYNC",
-        "postgresql://expert:expert_dev@localhost:5432/expert_service",
+        "postgresql+psycopg://expert:expert_dev@localhost:5432/expert_service",
     )
     # Vertex AI configuration (shared with agents-python)
     google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
