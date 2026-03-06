@@ -16,7 +16,15 @@
     .message.user { background: var(--pico-primary-background); margin-left: auto; }
     .message.assistant { background: var(--pico-card-background-color); margin-right: auto; }
     .message .role { font-size: 0.7rem; font-weight: bold; text-transform: uppercase; margin-bottom: 0.25rem; color: var(--pico-muted-color); }
-    .message .content { white-space: pre-wrap; word-break: break-word; }
+    .message .content { word-break: break-word; }
+    .message .content h1, .message .content h2, .message .content h3 { margin: 0.5rem 0 0.25rem; font-size: 1.1rem; }
+    .message .content h2 { font-size: 1rem; }
+    .message .content h3 { font-size: 0.95rem; }
+    .message .content p { margin: 0.25rem 0; }
+    .message .content ul, .message .content ol { margin: 0.25rem 0; padding-left: 1.5rem; }
+    .message .content code { font-size: 0.85em; padding: 0.1rem 0.3rem; background: var(--pico-muted-border-color); border-radius: 3px; }
+    .message .content pre { margin: 0.5rem 0; padding: 0.5rem; background: var(--pico-muted-border-color); border-radius: 4px; overflow-x: auto; }
+    .message .content pre code { padding: 0; background: none; }
     .tool-indicator { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; padding: 0.25rem 1rem; margin-right: auto; max-width: 85%; }
     .chat-input { display: flex; gap: 0.5rem; }
     .chat-input input { flex: 1; margin-bottom: 0; }
@@ -25,6 +33,7 @@
 </style>
 {% endblock %}
 
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 {% block content %}
 <div class="chat-container">
     <div class="chat-header">
@@ -97,6 +106,7 @@ async function sendMessage() {
 
     // Don't create assistant bubble yet — wait for first token
     let contentEl = null;
+    let rawMarkdown = '';
 
     try {
         const response = await fetch(`/api/projects/${projectId}/chat`, {
@@ -133,13 +143,18 @@ async function sendMessage() {
                         } else if (eventType === 'tool_result') {
                             // Tool result received, LLM will continue
                         } else if (eventType === 'done') {
-                            // Stream complete
+                            // Final render — parse full markdown
+                            if (contentEl && rawMarkdown) {
+                                contentEl.innerHTML = marked.parse(rawMarkdown);
+                            }
                         } else if (data.type === 'token') {
                             // Create assistant bubble on first token
                             if (!contentEl) {
                                 contentEl = appendMessage('assistant', '');
                             }
-                            contentEl.textContent += data.content;
+                            rawMarkdown += data.content;
+                            // Show plain text while streaming, render markdown on done
+                            contentEl.textContent = rawMarkdown;
                             scrollToBottom();
                         }
                     } catch (e) {
@@ -148,6 +163,10 @@ async function sendMessage() {
                     eventType = null;
                 }
             }
+        }
+        // Fallback render if done event was missed
+        if (contentEl && rawMarkdown) {
+            contentEl.innerHTML = marked.parse(rawMarkdown);
         }
     } catch (err) {
         if (!contentEl) {
