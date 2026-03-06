@@ -42,7 +42,12 @@ async def chat(project_id: UUID, data: ChatRequest):
     key = f"{project_id}:{thread_id}"
 
     if key not in _conversations:
-        _conversations[key] = [SystemMessage(content=SYSTEM_PROMPT)]
+        _conversations[key] = [
+            SystemMessage(
+                content=SYSTEM_PROMPT,
+                additional_kwargs={"cache_control": {"type": "ephemeral"}},
+            )
+        ]
 
     _conversations[key].append(HumanMessage(content=data.message))
 
