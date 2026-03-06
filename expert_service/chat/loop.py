@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from uuid import UUID
 
 from expert_service.chat.agent import get_agent
+from expert_service.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,12 @@ async def chat_stream(
     """
     agent = await get_agent(project_id, model)
     config = {"configurable": {"thread_id": f"{project_id}:{thread_id}"}}
+
+    if settings.langfuse_secret_key:
+        from langfuse.langchain import CallbackHandler
+
+        config["callbacks"] = [CallbackHandler()]
+
     inputs = {"messages": [{"role": "user", "content": message}]}
 
     buffered_tokens: list[str] = []
