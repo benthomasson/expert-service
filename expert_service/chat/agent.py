@@ -51,7 +51,7 @@ _pool: AsyncConnectionPool | None = None
 _checkpointer: AsyncPostgresSaver | None = None
 
 
-async def _get_checkpointer() -> AsyncPostgresSaver:
+async def get_checkpointer() -> AsyncPostgresSaver:
     """Get or create the async PostgreSQL checkpointer."""
     global _pool, _checkpointer
     if _checkpointer is None:
@@ -75,7 +75,7 @@ async def get_agent(project_id: UUID, model: str):
     if key not in _agents:
         tools = make_tools(project_id)
         llm = get_chat_model(model)
-        checkpointer = await _get_checkpointer()
+        checkpointer = await get_checkpointer()
         _agents[key] = create_react_agent(
             model=llm,
             tools=tools,

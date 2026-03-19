@@ -11,6 +11,7 @@ from expert_service.db.connection import get_session
 from sqlalchemy import text as sa_text
 
 from expert_service.db.models import Entry, Project, Source
+from expert_service.chat.meta_agent import invalidate_meta_cache
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -40,6 +41,7 @@ async def create_project(data: ProjectCreate, session: AsyncSession = Depends(ge
     session.add(project)
     await session.commit()
     await session.refresh(project)
+    invalidate_meta_cache()
     return ProjectResponse(
         id=project.id,
         name=project.name,
@@ -107,4 +109,5 @@ async def delete_project(project_id: UUID, session: AsyncSession = Depends(get_s
         raise HTTPException(status_code=404, detail="Project not found")
     await session.delete(project)
     await session.commit()
+    invalidate_meta_cache()
     return {"status": "deleted"}

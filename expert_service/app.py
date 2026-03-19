@@ -11,9 +11,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from expert_service.api import projects, pipeline, data, chat
+from expert_service.api import projects, pipeline, data, chat, meta_chat
 from expert_service.db.connection import get_session
 from expert_service.db.models import Assessment, Entry, Project, Source
+from expert_service.chat.meta_agent import invalidate_meta_cache
 from expert_service.rms import api as rms_api
 
 app = FastAPI(title="Expert Service", version="0.1.0")
@@ -23,6 +24,7 @@ app.include_router(projects.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(chat.router)
+app.include_router(meta_chat.router)
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -65,6 +67,22 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
     })
 
 
+@app.get("/meta/chat", response_class=HTMLResponse)
+async def meta_chat_page(request: Request, session: AsyncSession = Depends(get_session)):
+    """Meta-expert chat page — routes questions across all domain experts."""
+    result = await session.execute(select(Project).order_by(Project.name))
+    project_list = result.scalars().all()
+    experts = [
+        {"name": p.name, "domain": p.domain, "id": str(p.id)}
+        for p in project_list
+        if p.name != "meta-expert"
+    ]
+    return templates.TemplateResponse("chat/meta_chat.html", {
+        "request": request,
+        "experts": experts,
+    })
+
+
 @app.get("/projects/new", response_class=HTMLResponse)
 async def new_project_form(request: Request):
     return templates.TemplateResponse("projects/create.html", {"request": request})
@@ -81,6 +99,7 @@ async def create_project_form(
     session.add(project)
     await session.commit()
     await session.refresh(project)
+    invalidate_meta_cache()
     return RedirectResponse(f"/projects/{project.id}", status_code=303)
 
 
