@@ -345,7 +345,7 @@ async function explainBelief(button, nodeId) {
         const el = document.createElement('div');
         el.className = 'verify-detail';
         el.innerHTML = '<ol style="margin:0.25rem 0; padding-left:1.5rem; font-size:0.8rem;">' +
-            steps.map(s => `<li>${s}</li>`).join('') + '</ol>';
+            steps.map(s => `<li><strong>${s.node}</strong> [${s.truth_value}] — ${s.reason}</li>`).join('') + '</ol>';
         button.replaceWith(el);
     } catch (e) {
         button.removeAttribute('aria-busy');
