@@ -7,9 +7,11 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
+    Table,
     Text,
     UniqueConstraint,
 )
@@ -40,6 +42,21 @@ class Project(Base):
     pipeline_runs = relationship("PipelineRun", back_populates="project", cascade="all, delete-orphan")
 
 
+entry_sources = Table(
+    "entry_sources",
+    Base.metadata,
+    Column("entry_id", String, nullable=False),
+    Column("entry_project_id", UUID(as_uuid=True), nullable=False),
+    Column("source_id", UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False),
+    ForeignKeyConstraint(
+        ["entry_id", "entry_project_id"],
+        ["entries.id", "entries.project_id"],
+        ondelete="CASCADE",
+    ),
+    UniqueConstraint("entry_id", "entry_project_id", "source_id"),
+)
+
+
 class Source(Base):
     __tablename__ = "sources"
     __table_args__ = (UniqueConstraint("project_id", "slug"),)
@@ -53,6 +70,7 @@ class Source(Base):
     fetched_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="sources")
+    entries = relationship("Entry", secondary=entry_sources, back_populates="sources")
 
 
 class Entry(Base):
@@ -68,6 +86,7 @@ class Entry(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="entries")
+    sources = relationship("Source", secondary=entry_sources, back_populates="entries")
 
 
 class Claim(Base):

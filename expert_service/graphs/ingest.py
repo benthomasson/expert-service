@@ -9,7 +9,7 @@ from sqlalchemy import select
 from expert_service.core.fetch import fetch_docs
 from expert_service.core.summarize import summarize_batch as run_summarize
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Entry, Project, Source
+from expert_service.db.models import Entry, Project, Source, entry_sources
 from expert_service.graphs.state import IngestState
 
 DEFAULT_BATCH_SIZE = 10
@@ -156,6 +156,24 @@ def summarize_batch(state: IngestState) -> dict:
                 source_id=UUID(entry_dict["source_id"]) if entry_dict.get("source_id") else None,
             )
             session.merge(entry)  # idempotent — handles re-runs after crash
+
+            # Also populate the many-to-many join table
+            if entry_dict.get("source_id"):
+                existing = session.execute(
+                    select(entry_sources.c.source_id).where(
+                        entry_sources.c.entry_id == entry_dict["id"],
+                        entry_sources.c.entry_project_id == UUID(project_id),
+                        entry_sources.c.source_id == UUID(entry_dict["source_id"]),
+                    )
+                ).scalar_one_or_none()
+                if existing is None:
+                    session.execute(
+                        entry_sources.insert().values(
+                            entry_id=entry_dict["id"],
+                            entry_project_id=UUID(project_id),
+                            source_id=UUID(entry_dict["source_id"]),
+                        )
+                    )
         session.commit()
 
     entries_created += len(entries)

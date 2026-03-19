@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from sqlalchemy import select, text
 
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Embedding, Entry, Source
+from expert_service.db.models import Embedding, Entry, Source, entry_sources
 from expert_service.embeddings import embed_query
 from expert_service.rms import api as rms_api
 
@@ -88,14 +88,26 @@ def make_tools(project_id: UUID) -> list:
                 )
             ).scalar_one_or_none()
 
-        if not entry:
-            return f"Entry '{entry_id}' not found."
+            if not entry:
+                return f"Entry '{entry_id}' not found."
+
+            # Get linked source slugs
+            source_rows = session.execute(
+                select(Source.slug, Source.url)
+                .join(entry_sources, entry_sources.c.source_id == Source.id)
+                .where(
+                    entry_sources.c.entry_id == entry.id,
+                    entry_sources.c.entry_project_id == project_id,
+                )
+            ).all()
+
         return json.dumps(
             {
                 "id": entry.id,
                 "topic": entry.topic,
                 "title": entry.title,
                 "content": entry.content,
+                "sources": [{"slug": r.slug, "url": r.url} for r in source_rows],
             },
             indent=2,
         )
@@ -150,6 +162,33 @@ def make_tools(project_id: UUID) -> list:
                 "word_count": source.word_count,
                 "content": content + truncated,
             },
+            indent=2,
+        )
+
+    @tool
+    def list_source_entries(source_slug: str) -> str:
+        """List all entries derived from a specific source document. Use this to navigate from a source to its summaries/entries."""
+        with get_sync_session() as session:
+            source = session.execute(
+                select(Source.id).where(
+                    Source.project_id == project_id, Source.slug == source_slug
+                )
+            ).scalar_one_or_none()
+
+            if not source:
+                return f"Source '{source_slug}' not found."
+
+            rows = session.execute(
+                select(Entry.id, Entry.topic, Entry.title)
+                .join(entry_sources, (entry_sources.c.entry_id == Entry.id) & (entry_sources.c.entry_project_id == Entry.project_id))
+                .where(entry_sources.c.source_id == source)
+                .order_by(Entry.topic)
+            ).all()
+
+        if not rows:
+            return f"No entries linked to source '{source_slug}'."
+        return json.dumps(
+            [{"id": r.id, "topic": r.topic, "title": r.title} for r in rows],
             indent=2,
         )
 
@@ -333,7 +372,7 @@ def make_tools(project_id: UUID) -> list:
 
     return [
         search_knowledge, read_entry, list_entries, list_beliefs,
-        read_source, grep_content, semantic_search,
+        read_source, list_source_entries, grep_content, semantic_search,
         rms_status, rms_add, rms_retract, rms_assert, rms_explain,
         rms_show, rms_search, rms_trace, rms_challenge, rms_defend,
         rms_nogood, rms_compact,

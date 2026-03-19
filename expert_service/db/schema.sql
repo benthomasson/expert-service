@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS entries (
     PRIMARY KEY (id, project_id)
 );
 
+CREATE TABLE IF NOT EXISTS entry_sources (
+    entry_id TEXT NOT NULL,
+    entry_project_id UUID NOT NULL,
+    source_id UUID NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    FOREIGN KEY (entry_id, entry_project_id) REFERENCES entries(id, project_id) ON DELETE CASCADE,
+    UNIQUE(entry_id, entry_project_id, source_id)
+);
+
 CREATE TABLE IF NOT EXISTS claims (
     id TEXT NOT NULL,
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -155,3 +163,5 @@ CREATE INDEX IF NOT EXISTS idx_rms_nogoods_project ON rms_nogoods(project_id);
 CREATE INDEX IF NOT EXISTS idx_rms_log_project ON rms_propagation_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id);
+CREATE INDEX IF NOT EXISTS idx_entry_sources_entry ON entry_sources(entry_id, entry_project_id);
+CREATE INDEX IF NOT EXISTS idx_entry_sources_source ON entry_sources(source_id);

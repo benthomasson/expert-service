@@ -385,12 +385,20 @@ function renderEntryVerification(result) {
     }
     const d = result.data;
     const snippet = d.content.length > 300 ? d.content.substring(0, 300) + '...' : d.content;
+    let sourceDetails = '';
+    if (d.sources && d.sources.length > 0) {
+        const sourceLinks = d.sources.map(s =>
+            s.url ? `<a href="${s.url}" target="_blank">${s.slug}</a>` : s.slug
+        ).join(', ');
+        sourceDetails = `<div class="verify-detail">Sources: ${sourceLinks}</div>`;
+    }
     return `<div class="verify-item verify-in">
         <span class="verify-icon">&#10003;</span>
         <div>
             <strong>Entry ${d.id}</strong>${d.title ? ` — ${d.title}` : ''}
             ${result.expert ? `<div class="verify-detail">Expert: ${result.expert}</div>` : ''}
             <div class="verify-detail">Topic: ${d.topic}</div>
+            ${sourceDetails}
             <div class="verify-text">${snippet}</div>
         </div>
     </div>`;

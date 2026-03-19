@@ -5,11 +5,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from expert_service.db.connection import get_session
-from expert_service.db.models import Entry, Source
+from expert_service.db.models import Entry, Source, entry_sources
 from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["data"])
@@ -33,12 +34,39 @@ async def get_source(project_id: UUID, slug: str, session: AsyncSession = Depend
     source = result.scalar_one_or_none()
     if not source:
         return {"error": "Source not found"}
+    # Count linked entries
+    entry_count_result = await session.execute(
+        select(func.count()).select_from(entry_sources).where(
+            entry_sources.c.source_id == source.id
+        )
+    )
     return {
         "slug": source.slug,
         "url": source.url,
         "word_count": source.word_count,
+        "entry_count": entry_count_result.scalar(),
         "fetched_at": source.fetched_at.isoformat() if source.fetched_at else None,
     }
+
+
+@router.get("/sources/{slug}/entries")
+async def list_source_entries(
+    project_id: UUID, slug: str, session: AsyncSession = Depends(get_session)
+):
+    """List all entries linked to a source."""
+    source = await session.execute(
+        select(Source.id).where(Source.project_id == project_id, Source.slug == slug)
+    )
+    source_id = source.scalar_one_or_none()
+    if source_id is None:
+        return {"error": "Source not found"}
+    result = await session.execute(
+        select(Entry.id, Entry.topic, Entry.title, Entry.created_at)
+        .join(entry_sources, (entry_sources.c.entry_id == Entry.id) & (entry_sources.c.entry_project_id == Entry.project_id))
+        .where(entry_sources.c.source_id == source_id)
+        .order_by(Entry.created_at.desc())
+    )
+    return [dict(r._mapping) for r in result.all()]
 
 
 @router.get("/entries")
@@ -47,19 +75,31 @@ async def list_entries(
     topic: str | None = None,
     session: AsyncSession = Depends(get_session),
 ):
-    q = select(Entry.id, Entry.topic, Entry.title, Entry.created_at).where(
+    q = select(Entry).options(selectinload(Entry.sources)).where(
         Entry.project_id == project_id
     )
     if topic:
         q = q.where(Entry.topic == topic)
     result = await session.execute(q.order_by(Entry.created_at.desc()))
-    return [dict(r._mapping) for r in result.all()]
+    entries = result.scalars().all()
+    return [
+        {
+            "id": e.id,
+            "topic": e.topic,
+            "title": e.title,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "source_slugs": [s.slug for s in e.sources],
+        }
+        for e in entries
+    ]
 
 
 @router.get("/entries/{entry_id}")
 async def get_entry(project_id: UUID, entry_id: str, session: AsyncSession = Depends(get_session)):
     result = await session.execute(
-        select(Entry).where(Entry.project_id == project_id, Entry.id == entry_id)
+        select(Entry)
+        .options(selectinload(Entry.sources))
+        .where(Entry.project_id == project_id, Entry.id == entry_id)
     )
     entry = result.scalar_one_or_none()
     if not entry:
@@ -70,6 +110,10 @@ async def get_entry(project_id: UUID, entry_id: str, session: AsyncSession = Dep
         "title": entry.title,
         "content": entry.content,
         "created_at": entry.created_at.isoformat(),
+        "sources": [
+            {"slug": s.slug, "url": s.url, "word_count": s.word_count}
+            for s in entry.sources
+        ],
     }
 
 
@@ -218,6 +262,13 @@ async def import_entries(
     """Bulk import entries from a file-based expert repo."""
     imported = 0
     skipped = 0
+    linked = 0
+
+    # Pre-load source slug→id map for auto-matching
+    source_result = await session.execute(
+        select(Source.slug, Source.id).where(Source.project_id == project_id)
+    )
+    source_map = {row.slug: row.id for row in source_result.all()}
 
     for e in data.entries:
         # Check if already exists
@@ -239,8 +290,19 @@ async def import_entries(
         session.add(entry)
         imported += 1
 
+        # Auto-match entry to source by topic == slug
+        if e.topic in source_map:
+            await session.execute(
+                insert(entry_sources).values(
+                    entry_id=e.id,
+                    entry_project_id=project_id,
+                    source_id=source_map[e.topic],
+                )
+            )
+            linked += 1
+
     await session.commit()
-    return {"imported": imported, "skipped": skipped}
+    return {"imported": imported, "skipped": skipped, "linked": linked}
 
 
 @router.post("/import/beliefs")
@@ -279,3 +341,76 @@ async def import_beliefs(
         return {"imported": imported, "skipped": skipped}
 
     return await asyncio.to_thread(_do_import)
+
+
+@router.post("/link-entries-sources")
+async def link_entries_sources(
+    project_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Backfill entry-source links by matching entry.topic to source.slug.
+
+    Also migrates any existing source_id FK values into the join table.
+    """
+    linked = 0
+    already_linked = 0
+    migrated = 0
+
+    # 1. Migrate existing source_id FK values into join table
+    entries_with_fk = await session.execute(
+        select(Entry.id, Entry.project_id, Entry.source_id)
+        .where(Entry.project_id == project_id, Entry.source_id.isnot(None))
+    )
+    for row in entries_with_fk.all():
+        existing = await session.execute(
+            select(entry_sources.c.source_id).where(
+                entry_sources.c.entry_id == row.id,
+                entry_sources.c.entry_project_id == row.project_id,
+                entry_sources.c.source_id == row.source_id,
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            await session.execute(
+                insert(entry_sources).values(
+                    entry_id=row.id,
+                    entry_project_id=row.project_id,
+                    source_id=row.source_id,
+                )
+            )
+            migrated += 1
+
+    # 2. Auto-match unlinked entries by topic == slug
+    source_result = await session.execute(
+        select(Source.slug, Source.id).where(Source.project_id == project_id)
+    )
+    source_map = {row.slug: row.id for row in source_result.all()}
+
+    all_entries = await session.execute(
+        select(Entry.id, Entry.project_id, Entry.topic)
+        .where(Entry.project_id == project_id)
+    )
+    for row in all_entries.all():
+        if row.topic not in source_map:
+            continue
+        # Check if link already exists
+        existing = await session.execute(
+            select(entry_sources.c.source_id).where(
+                entry_sources.c.entry_id == row.id,
+                entry_sources.c.entry_project_id == row.project_id,
+                entry_sources.c.source_id == source_map[row.topic],
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            already_linked += 1
+            continue
+        await session.execute(
+            insert(entry_sources).values(
+                entry_id=row.id,
+                entry_project_id=row.project_id,
+                source_id=source_map[row.topic],
+            )
+        )
+        linked += 1
+
+    await session.commit()
+    return {"linked": linked, "migrated": migrated, "already_linked": already_linked}
