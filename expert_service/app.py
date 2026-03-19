@@ -158,6 +158,9 @@ async def chat_page(request: Request, project_id: UUID, session: AsyncSession = 
     project = result.scalar_one_or_none()
     if not project:
         return HTMLResponse("Project not found", status_code=404)
+    # Redirect meta-expert project chat to the dedicated meta-expert UI
+    if project.name == "meta-expert":
+        return RedirectResponse("/meta/chat", status_code=303)
     return templates.TemplateResponse("chat/chat.html", {
         "request": request,
         "project": {"id": project_id, "name": project.name, "domain": project.domain},
