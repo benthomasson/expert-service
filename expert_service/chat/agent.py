@@ -20,7 +20,8 @@ You also have RMS (Reason Maintenance System) tools for formal belief tracking w
 
 Tool usage rules:
 - SEARCH ONCE, then answer. Do not call search_knowledge or grep_content more than once per question.
-- If search returns entries, read_entry ONE entry to get details, then answer. Pattern: search → read → answer.
+- If search returns matching beliefs, cite them directly (belief ID + text) — do NOT call read_entry just to restate what a belief already says. Beliefs are authoritative.
+- Only use read_entry when you need more detail from an entry beyond what the search snippet provides.
 - NEVER call the same tool twice or call two search tools. Pick ONE: search_knowledge, grep_content, or semantic_search.
 - search_knowledge: keyword/concept search (default). grep_content: exact strings (commands, filenames). semantic_search: meaning-based when keywords fail.
 - Do NOT narrate tool usage. No "Let me search..." — just call tools and answer.
