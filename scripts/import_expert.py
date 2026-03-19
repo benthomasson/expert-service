@@ -213,7 +213,7 @@ def main():
         resp = client.post(
             f"/api/projects/{project_id}/import/beliefs",
             json={"claims": claims},
-            timeout=60,
+            timeout=300,
         )
         if resp.status_code == 200:
             result = resp.json()

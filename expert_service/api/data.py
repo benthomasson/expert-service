@@ -25,6 +25,22 @@ async def list_sources(project_id: UUID, session: AsyncSession = Depends(get_ses
     return [dict(r._mapping) for r in result.all()]
 
 
+@router.get("/sources/{slug}")
+async def get_source(project_id: UUID, slug: str, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(Source).where(Source.project_id == project_id, Source.slug == slug)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        return {"error": "Source not found"}
+    return {
+        "slug": source.slug,
+        "url": source.url,
+        "word_count": source.word_count,
+        "fetched_at": source.fetched_at.isoformat() if source.fetched_at else None,
+    }
+
+
 @router.get("/entries")
 async def list_entries(
     project_id: UUID,

@@ -209,7 +209,7 @@ async function sendMessage() {
     // Add verify button if citations found
     if (contentEl && rawMarkdown) {
         const citations = extractCitations(rawMarkdown);
-        if (citations.beliefs.length > 0 || citations.entries.length > 0) {
+        if (citations.beliefs.length > 0 || citations.entries.length > 0 || citations.sources.length > 0) {
             const verifyBtn = document.createElement('button');
             verifyBtn.className = 'outline secondary verify-btn';
             verifyBtn.textContent = 'Verify Sources';
@@ -225,7 +225,7 @@ async function sendMessage() {
 
 function extractCitations(text) {
     const cleaned = text.replace(/```[\s\S]*?```/g, '').replace(/`/g, '');
-    const citations = { beliefs: [], entries: [] };
+    const citations = { beliefs: [], entries: [], sources: [] };
 
     // Match belief citations: belief: rhel9-foo, belief ID: rhel9-foo, belief ID rhel9-foo
     const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
@@ -243,6 +243,15 @@ function extractCitations(text) {
         const id = match[1];
         if (!citations.entries.includes(id)) {
             citations.entries.push(id);
+        }
+    }
+
+    // Match source references: Source: <slug> or (Source: <slug>)
+    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*)/gi;
+    while ((match = sourcePattern.exec(cleaned)) !== null) {
+        const slug = match[1].replace(/[.,;:)+]+$/, '');
+        if (slug && !citations.sources.includes(slug)) {
+            citations.sources.push(slug);
         }
     }
 
@@ -284,7 +293,20 @@ async function verifyCitations(button, citations) {
         return { type: 'entry', id, data: null, ok: false, expert: null };
     });
 
-    const results = await Promise.all([...beliefPromises, ...entryPromises]);
+    const sourcePromises = citations.sources.map(async (slug) => {
+        for (const [name, projectId] of Object.entries(expertsMap)) {
+            try {
+                const r = await fetch(`/api/projects/${projectId}/sources/${slug}`);
+                const data = await r.json();
+                if (!data.error) {
+                    return { type: 'source', id: slug, data, ok: true, expert: name };
+                }
+            } catch (e) { /* try next */ }
+        }
+        return { type: 'source', id: slug, data: null, ok: false, expert: null };
+    });
+
+    const results = await Promise.all([...beliefPromises, ...entryPromises, ...sourcePromises]);
 
     const panel = document.createElement('div');
     panel.className = 'verify-panel';
@@ -293,8 +315,10 @@ async function verifyCitations(button, citations) {
     for (const r of results) {
         if (r.type === 'belief') {
             html += renderBeliefVerification(r);
-        } else {
+        } else if (r.type === 'entry') {
             html += renderEntryVerification(r);
+        } else if (r.type === 'source') {
+            html += renderSourceVerification(r);
         }
     }
 
@@ -368,6 +392,33 @@ function renderEntryVerification(result) {
             ${result.expert ? `<div class="verify-detail">Expert: ${result.expert}</div>` : ''}
             <div class="verify-detail">Topic: ${d.topic}</div>
             <div class="verify-text">${snippet}</div>
+        </div>
+    </div>`;
+}
+
+function renderSourceVerification(result) {
+    if (!result.ok) {
+        return `<div class="verify-item verify-error">
+            <span class="verify-icon">&#10007;</span>
+            <div><strong>Source ${result.id}</strong> — not found in any expert</div>
+        </div>`;
+    }
+    const d = result.data;
+    let details = '';
+    if (result.expert) {
+        details += `<div class="verify-detail">Expert: ${result.expert}</div>`;
+    }
+    if (d.url) {
+        details += `<div class="verify-detail">URL: <a href="${d.url}" target="_blank">${d.url}</a></div>`;
+    }
+    if (d.word_count) {
+        details += `<div class="verify-detail">${d.word_count.toLocaleString()} words</div>`;
+    }
+    return `<div class="verify-item verify-in">
+        <span class="verify-icon">&#10003;</span>
+        <div>
+            <strong>Source</strong> ${d.slug}
+            ${details}
         </div>
     </div>`;
 }
