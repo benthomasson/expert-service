@@ -31,6 +31,18 @@
     .chat-input input { flex: 1; margin-bottom: 0; }
     .chat-input button { margin-bottom: 0; white-space: nowrap; }
     #model-select { width: auto; margin-bottom: 0; padding: 0.4rem 0.8rem; font-size: 0.85rem; }
+    .verify-btn { font-size: 0.8rem !important; padding: 0.25rem 0.75rem !important; margin-top: 0.5rem; }
+    .verify-panel { margin-top: 0.5rem; font-size: 0.85rem; }
+    .verify-panel details { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 0.5rem 0.75rem; }
+    .verify-item { display: flex; gap: 0.5rem; padding: 0.5rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+    .verify-item:last-child { border-bottom: none; }
+    .verify-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 0.1rem; }
+    .verify-in .verify-icon { color: #198754; }
+    .verify-out .verify-icon { color: #ffc107; }
+    .verify-error .verify-icon { color: #dc3545; }
+    .verify-status { font-size: 0.75rem; font-family: monospace; }
+    .verify-text { color: var(--pico-muted-color); margin: 0.25rem 0; }
+    .verify-detail { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; }
 </style>
 {% endblock %}
 
@@ -175,9 +187,170 @@ async function sendMessage() {
         contentEl.textContent = `Error: ${err.message}`;
     }
 
+    // Add verify button if citations found
+    if (contentEl && rawMarkdown) {
+        const citations = extractCitations(rawMarkdown);
+        if (citations.beliefs.length > 0 || citations.entries.length > 0) {
+            const verifyBtn = document.createElement('button');
+            verifyBtn.className = 'outline secondary verify-btn';
+            verifyBtn.textContent = 'Verify Sources';
+            verifyBtn.onclick = () => verifyCitations(verifyBtn, citations);
+            contentEl.parentElement.appendChild(verifyBtn);
+        }
+    }
+
     sending = false;
     document.getElementById('send-btn').removeAttribute('aria-busy');
     input.focus();
+}
+
+function extractCitations(text) {
+    // Strip fenced code blocks and inline backticks to avoid false positives
+    const cleaned = text.replace(/```[\s\S]*?```/g, '').replace(/`/g, '');
+    const citations = { beliefs: [], entries: [] };
+
+    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
+    let match;
+    while ((match = beliefPattern.exec(cleaned)) !== null) {
+        const id = match[1].toLowerCase();
+        if (!citations.beliefs.includes(id)) {
+            citations.beliefs.push(id);
+        }
+    }
+
+    const entryPattern = /Entry\s+([a-f0-9]{6,})/gi;
+    while ((match = entryPattern.exec(cleaned)) !== null) {
+        const id = match[1];
+        if (!citations.entries.includes(id)) {
+            citations.entries.push(id);
+        }
+    }
+
+    return citations;
+}
+
+async function verifyCitations(button, citations) {
+    button.setAttribute('aria-busy', 'true');
+    button.disabled = true;
+
+    const existingPanel = button.parentElement.querySelector('.verify-panel');
+    if (existingPanel) existingPanel.remove();
+
+    const beliefPromises = citations.beliefs.map(id =>
+        fetch(`/api/projects/${projectId}/beliefs/${id}`)
+            .then(r => r.json())
+            .then(data => ({ type: 'belief', id, data, ok: !data.error && !data.detail }))
+            .catch(() => ({ type: 'belief', id, data: null, ok: false }))
+    );
+
+    const entryPromises = citations.entries.map(id =>
+        fetch(`/api/projects/${projectId}/entries/${id}`)
+            .then(r => r.json())
+            .then(data => ({ type: 'entry', id, data, ok: !data.error }))
+            .catch(() => ({ type: 'entry', id, data: null, ok: false }))
+    );
+
+    const results = await Promise.all([...beliefPromises, ...entryPromises]);
+
+    const panel = document.createElement('div');
+    panel.className = 'verify-panel';
+    let html = '<details open><summary style="font-size:0.85rem; cursor:pointer;">Source Verification</summary>';
+
+    for (const r of results) {
+        if (r.type === 'belief') {
+            html += renderBeliefVerification(r);
+        } else {
+            html += renderEntryVerification(r);
+        }
+    }
+
+    html += '</details>';
+    panel.innerHTML = html;
+    button.parentElement.appendChild(panel);
+    button.removeAttribute('aria-busy');
+    button.disabled = false;
+}
+
+function renderBeliefVerification(result) {
+    if (!result.ok) {
+        return `<div class="verify-item verify-error">
+            <span class="verify-icon">&#10007;</span>
+            <div><strong>${result.id}</strong> — not found</div>
+        </div>`;
+    }
+    const d = result.data;
+    const isIn = d.truth_value === 'IN';
+    const cls = isIn ? 'verify-in' : 'verify-out';
+    const icon = isIn ? '&#10003;' : '&#9888;';
+
+    let details = '';
+    if (d.source) {
+        details += `<div class="verify-detail">Source: ${d.source}</div>`;
+    }
+    if (d.justifications && d.justifications.length > 0) {
+        const j = d.justifications[0];
+        if (j.antecedents && j.antecedents.length > 0) {
+            details += `<div class="verify-detail">Depends on: ${j.antecedents.join(', ')}</div>`;
+        }
+        if (j.label) {
+            details += `<div class="verify-detail">Justification: ${j.label}</div>`;
+        }
+    }
+    if (d.dependents && d.dependents.length > 0) {
+        details += `<div class="verify-detail">${d.dependents.length} dependent belief(s)</div>`;
+    }
+
+    return `<div class="verify-item ${cls}">
+        <span class="verify-icon">${icon}</span>
+        <div>
+            <strong>${d.id}</strong> <span class="verify-status">[${d.truth_value}]</span>
+            <div class="verify-text">${d.text}</div>
+            ${details}
+            <button class="outline verify-btn" onclick="explainBelief(this, '${d.id}')"
+                style="font-size:0.75rem; padding:0.1rem 0.5rem; margin-top:0.25rem;">Why?</button>
+        </div>
+    </div>`;
+}
+
+function renderEntryVerification(result) {
+    if (!result.ok) {
+        return `<div class="verify-item verify-error">
+            <span class="verify-icon">&#10007;</span>
+            <div><strong>Entry ${result.id}</strong> — not found</div>
+        </div>`;
+    }
+    const d = result.data;
+    const snippet = d.content.length > 300 ? d.content.substring(0, 300) + '...' : d.content;
+    return `<div class="verify-item verify-in">
+        <span class="verify-icon">&#10003;</span>
+        <div>
+            <strong>Entry ${d.id}</strong>${d.title ? ` — ${d.title}` : ''}
+            <div class="verify-detail">Topic: ${d.topic}</div>
+            <div class="verify-text">${snippet}</div>
+        </div>
+    </div>`;
+}
+
+async function explainBelief(button, nodeId) {
+    button.setAttribute('aria-busy', 'true');
+    try {
+        const resp = await fetch(`/api/projects/${projectId}/beliefs/${nodeId}/explain`);
+        const data = await resp.json();
+        const steps = data.steps || [];
+        if (steps.length === 0) {
+            button.replaceWith(Object.assign(document.createElement('div'),
+                { className: 'verify-detail', textContent: 'Premise — no justification chain (directly asserted).' }));
+            return;
+        }
+        const el = document.createElement('div');
+        el.className = 'verify-detail';
+        el.innerHTML = '<ol style="margin:0.25rem 0; padding-left:1.5rem; font-size:0.8rem;">' +
+            steps.map(s => `<li>${s}</li>`).join('') + '</ol>';
+        button.replaceWith(el);
+    } catch (e) {
+        button.removeAttribute('aria-busy');
+        button.textContent = 'Error';
+    }
 }
 </script>
 {% endblock %}

@@ -68,15 +68,21 @@ async def list_beliefs(
     return result
 
 
+@router.get("/beliefs/status")
+async def beliefs_status(project_id: UUID):
+    result = await asyncio.to_thread(rms_api.get_status, project_id)
+    return result
+
+
 @router.get("/beliefs/{node_id}")
 async def get_belief(project_id: UUID, node_id: str):
     result = await asyncio.to_thread(rms_api.show_node, project_id, node_id)
     return result
 
 
-@router.get("/beliefs/status")
-async def beliefs_status(project_id: UUID):
-    result = await asyncio.to_thread(rms_api.get_status, project_id)
+@router.get("/beliefs/{node_id}/explain")
+async def explain_belief(project_id: UUID, node_id: str):
+    result = await asyncio.to_thread(rms_api.explain_node, project_id, node_id)
     return result
 
 
