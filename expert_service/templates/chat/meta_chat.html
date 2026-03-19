@@ -227,24 +227,13 @@ function extractCitations(text) {
     const cleaned = text.replace(/```[\s\S]*?```/g, '').replace(/`/g, '');
     const citations = { beliefs: [], entries: [] };
 
-    // Match belief citations in various formats:
-    // - belief: rhel9-foo, belief ID: rhel9-foo, belief ID rhel9-foo
-    // - (rhel9-foo-bar-baz) — parenthesized slug-style IDs (3+ hyphen segments)
+    // Match belief citations: belief: rhel9-foo, belief ID: rhel9-foo, belief ID rhel9-foo
     const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
     let match;
     while ((match = beliefPattern.exec(cleaned)) !== null) {
-        const id = match[1].toLowerCase();
-        if (!citations.beliefs.includes(id)) {
-            citations.beliefs.push(id);
-        }
-    }
-
-    // Also match parenthesized slug-style IDs like (rhel9-firewalld-enabled-by-default)
-    // Require at least 2 hyphens to avoid false positives on normal parenthesized text
-    const parenPattern = /\(([a-z0-9]+(?:-[a-z0-9]+){2,})\)/gi;
-    while ((match = parenPattern.exec(cleaned)) !== null) {
-        const id = match[1].toLowerCase();
-        if (!citations.beliefs.includes(id)) {
+        // Strip trailing punctuation (periods, commas at end of sentences)
+        const id = match[1].toLowerCase().replace(/[.,;:]+$/, '');
+        if (id && !citations.beliefs.includes(id)) {
             citations.beliefs.push(id);
         }
     }

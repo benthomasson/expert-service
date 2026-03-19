@@ -212,8 +212,9 @@ function extractCitations(text) {
     const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
     let match;
     while ((match = beliefPattern.exec(cleaned)) !== null) {
-        const id = match[1].toLowerCase();
-        if (!citations.beliefs.includes(id)) {
+        // Strip trailing punctuation (periods, commas at end of sentences)
+        const id = match[1].toLowerCase().replace(/[.,;:]+$/, '');
+        if (id && !citations.beliefs.includes(id)) {
             citations.beliefs.push(id);
         }
     }
