@@ -27,6 +27,7 @@
     .message .content pre { margin: 0.5rem 0; padding: 0.5rem; background: var(--pico-muted-border-color); border-radius: 4px; overflow-x: auto; }
     .message .content pre code { padding: 0; background: none; }
     .tool-indicator { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; padding: 0.25rem 1rem; margin-right: auto; max-width: 85%; }
+    .reflection-indicator { font-size: 0.7rem; color: var(--pico-muted-color); font-style: italic; padding: 0.15rem 1rem; margin-right: auto; max-width: 85%; opacity: 0.6; }
     .chat-input { display: flex; gap: 0.5rem; }
     .chat-input input { flex: 1; margin-bottom: 0; }
     .chat-input button { margin-bottom: 0; white-space: nowrap; }
@@ -115,6 +116,21 @@ function appendToolIndicator(text) {
     scrollToBottom();
 }
 
+function appendReflectionIndicator(name, args) {
+    const messages = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'reflection-indicator';
+    if (name === 'rms_add' && args.node_id) {
+        div.textContent = `Learning: ${args.node_id}`;
+    } else if (name === 'rms_search') {
+        div.textContent = `Checking existing knowledge...`;
+    } else {
+        div.textContent = `Reflecting: ${name}`;
+    }
+    messages.appendChild(div);
+    scrollToBottom();
+}
+
 function formatToolCall(name, args) {
     if (name === 'ask_expert' && args.expert_name) {
         return `Consulting ${args.expert_name} expert...`;
@@ -177,6 +193,8 @@ async function sendMessage() {
                             appendToolIndicator(formatToolCall(data.name, data.args));
                         } else if (eventType === 'tool_result') {
                             // Tool result received
+                        } else if (eventType === 'reflection') {
+                            appendReflectionIndicator(data.name, data.args);
                         } else if (eventType === 'done') {
                             if (contentEl && rawMarkdown) {
                                 contentEl.innerHTML = marked.parse(rawMarkdown);
