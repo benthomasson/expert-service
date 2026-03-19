@@ -1,5 +1,6 @@
 """Data access API routes — sources, entries, claims, search."""
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -8,7 +9,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expert_service.db.connection import get_session
-from expert_service.db.models import Claim, Entry, Nogood, Source
+from expert_service.db.models import Entry, Source
+from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["data"])
 
@@ -55,46 +57,27 @@ async def get_entry(project_id: UUID, entry_id: str, session: AsyncSession = Dep
     }
 
 
-@router.get("/claims")
-async def list_claims(
+@router.get("/beliefs")
+async def list_beliefs(
     project_id: UUID,
     status: str | None = None,
-    session: AsyncSession = Depends(get_session),
 ):
-    q = select(Claim).where(Claim.project_id == project_id)
-    if status:
-        q = q.where(Claim.status == status)
-    result = await session.execute(q.order_by(Claim.created_at.desc()))
-    claims = result.scalars().all()
-    return [
-        {
-            "id": c.id,
-            "text": c.text,
-            "status": c.status,
-            "source": c.source,
-            "review_status": c.review_status,
-            "created_at": c.created_at.isoformat(),
-        }
-        for c in claims
-    ]
-
-
-@router.get("/nogoods")
-async def list_nogoods(project_id: UUID, session: AsyncSession = Depends(get_session)):
-    result = await session.execute(
-        select(Nogood).where(Nogood.project_id == project_id).order_by(Nogood.discovered_at.desc())
+    result = await asyncio.to_thread(
+        rms_api.list_nodes, project_id, status=status
     )
-    nogoods = result.scalars().all()
-    return [
-        {
-            "id": n.id,
-            "description": n.description,
-            "resolution": n.resolution,
-            "claim_ids": n.claim_ids,
-            "discovered_at": n.discovered_at.isoformat(),
-        }
-        for n in nogoods
-    ]
+    return result
+
+
+@router.get("/beliefs/{node_id}")
+async def get_belief(project_id: UUID, node_id: str):
+    result = await asyncio.to_thread(rms_api.show_node, project_id, node_id)
+    return result
+
+
+@router.get("/beliefs/status")
+async def beliefs_status(project_id: UUID):
+    result = await asyncio.to_thread(rms_api.get_status, project_id)
+    return result
 
 
 @router.get("/search")
@@ -117,20 +100,20 @@ async def search(
         .limit(20)
     )
 
-    # Search claims
-    claim_results = await session.execute(
-        select(Claim.id, Claim.text, Claim.status)
-        .where(
-            Claim.project_id == project_id,
-            text("to_tsvector('english', text) @@ plainto_tsquery('english', :q)"),
-        )
-        .params(q=q)
-        .limit(20)
+    # Search RMS beliefs
+    belief_results = await session.execute(
+        text(
+            "SELECT id, text, truth_value FROM rms_nodes "
+            "WHERE project_id = :pid "
+            "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
+            "LIMIT 20"
+        ),
+        {"pid": str(project_id), "q": q},
     )
 
     return {
         "entries": [dict(r._mapping) for r in entry_results.all()],
-        "claims": [dict(r._mapping) for r in claim_results.all()],
+        "beliefs": [dict(r._mapping) for r in belief_results.all()],
     }
 
 
@@ -242,31 +225,35 @@ async def import_entries(
 async def import_beliefs(
     project_id: UUID,
     data: ClaimsImportRequest,
-    session: AsyncSession = Depends(get_session),
 ):
-    """Bulk import beliefs/claims from a file-based expert repo."""
-    imported = 0
-    skipped = 0
+    """Bulk import beliefs into RMS from a file-based expert repo."""
 
-    for c in data.claims:
-        existing = await session.execute(
-            select(Claim.id).where(Claim.project_id == project_id, Claim.id == c.id)
-        )
-        if existing.scalar_one_or_none() is not None:
-            skipped += 1
-            continue
+    def _do_import():
+        imported = 0
+        skipped = 0
 
-        claim = Claim(
-            id=c.id,
-            project_id=project_id,
-            text=c.text,
-            status=c.status,
-            source=c.source,
-            source_hash=c.source_hash,
-            review_status="accepted",  # Already reviewed in file-based system
-        )
-        session.add(claim)
-        imported += 1
+        # Check existing nodes
+        existing_status = rms_api.get_status(project_id)
+        existing_ids = {n["id"] for n in existing_status["nodes"]}
 
-    await session.commit()
-    return {"imported": imported, "skipped": skipped}
+        for c in data.claims:
+            if c.id in existing_ids:
+                skipped += 1
+                continue
+
+            rms_api.add_node(
+                project_id,
+                node_id=c.id,
+                text=c.text,
+                source=c.source or "",
+            )
+
+            # Match original status
+            if c.status == "OUT":
+                rms_api.retract_node(project_id, c.id)
+
+            imported += 1
+
+        return {"imported": imported, "skipped": skipped}
+
+    return await asyncio.to_thread(_do_import)

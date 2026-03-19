@@ -1,5 +1,6 @@
 """FastAPI application — API + web UI for expert-service."""
 
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -7,12 +8,13 @@ import uvicorn
 from fastapi import FastAPI, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expert_service.api import projects, pipeline, data, chat
 from expert_service.db.connection import get_session
-from expert_service.db.models import Assessment, Claim, Entry, Nogood, Project, Source
+from expert_service.db.models import Assessment, Entry, Project, Source
+from expert_service.rms import api as rms_api
 
 app = FastAPI(title="Expert Service", version="0.1.0")
 
@@ -44,10 +46,9 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
         entry_count = await session.scalar(
             select(func.count()).select_from(Entry).where(Entry.project_id == p.id)
         )
-        claim_count = await session.scalar(
-            select(func.count()).select_from(Claim).where(
-                Claim.project_id == p.id, Claim.status == "IN"
-            )
+        belief_count = await session.scalar(
+            sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid AND truth_value = 'IN'"),
+            {"pid": str(p.id)},
         )
         projects_with_stats.append({
             "id": p.id,
@@ -55,7 +56,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
             "domain": p.domain,
             "source_count": source_count or 0,
             "entry_count": entry_count or 0,
-            "claim_count": claim_count or 0,
+            "belief_count": belief_count or 0,
         })
 
     return templates.TemplateResponse("projects/list.html", {
@@ -101,13 +102,13 @@ async def project_detail(
         "entries": await session.scalar(
             select(func.count()).select_from(Entry).where(Entry.project_id == project_id)
         ) or 0,
-        "claims": await session.scalar(
-            select(func.count()).select_from(Claim).where(
-                Claim.project_id == project_id, Claim.status == "IN"
-            )
+        "beliefs": await session.scalar(
+            sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid AND truth_value = 'IN'"),
+            {"pid": str(project_id)},
         ) or 0,
         "nogoods": await session.scalar(
-            select(func.count()).select_from(Nogood).where(Nogood.project_id == project_id)
+            sa_text("SELECT count(*) FROM rms_nogoods WHERE project_id = :pid"),
+            {"pid": str(project_id)},
         ) or 0,
         "assessments": await session.scalar(
             select(func.count()).select_from(Assessment).where(Assessment.project_id == project_id)
@@ -167,19 +168,14 @@ async def beliefs_review_page(
     if not project:
         return HTMLResponse("Project not found", status_code=404)
 
-    claim_result = await session.execute(
-        select(Claim).where(
-            Claim.project_id == project_id,
-            Claim.status == "PROPOSED",
-            Claim.review_status == "pending",
-        )
-    )
-    beliefs = claim_result.scalars().all()
+    # Get OUT nodes (proposed but not yet accepted)
+    out_result = await asyncio.to_thread(rms_api.list_nodes, project_id, status="OUT")
+    beliefs = out_result["nodes"]
 
     return templates.TemplateResponse("beliefs/review.html", {
         "request": request,
         "project": {"id": project_id, "name": project.name},
-        "beliefs": [{"id": b.id, "text": b.text, "source": b.source} for b in beliefs],
+        "beliefs": [{"id": b["id"], "text": b["text"], "source": ""} for b in beliefs],
     })
 
 
@@ -187,7 +183,6 @@ async def beliefs_review_page(
 async def beliefs_review_submit(
     request: Request,
     project_id: UUID,
-    session: AsyncSession = Depends(get_session),
 ):
     """Handle form submission of belief review decisions."""
     form_data = await request.form()
@@ -204,24 +199,17 @@ async def beliefs_review_submit(
             f"/projects/{project_id}/beliefs/review", status_code=303
         )
 
-    # Update claims directly in DB (simpler than going through the graph for form submissions)
-    for belief_id, decision in decisions.items():
-        claim_result = await session.execute(
-            select(Claim).where(
-                Claim.id == belief_id,
-                Claim.project_id == project_id,
-            )
-        )
-        claim = claim_result.scalar_one_or_none()
-        if claim:
-            if decision == "accept":
-                claim.status = "IN"
-                claim.review_status = "accepted"
-            elif decision == "reject":
-                claim.status = "OUT"
-                claim.review_status = "rejected"
+    # Update RMS nodes via assert/retract
+    def _apply_decisions():
+        for belief_id, decision in decisions.items():
+            try:
+                if decision == "accept":
+                    rms_api.assert_node(project_id, belief_id)
+                # "reject" leaves node as OUT (already retracted during proposal)
+            except KeyError:
+                pass
 
-    await session.commit()
+    await asyncio.to_thread(_apply_decisions)
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 

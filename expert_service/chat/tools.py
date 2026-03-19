@@ -7,8 +7,9 @@ from langchain_core.tools import tool
 from sqlalchemy import select, text
 
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Claim, Embedding, Entry, Source
+from expert_service.db.models import Embedding, Entry, Source
 from expert_service.embeddings import embed_query
+from expert_service.rms import api as rms_api
 
 
 def _extract_match_context(content: str, pattern: str, context_chars: int = 200) -> str:
@@ -49,15 +50,15 @@ def make_tools(project_id: UUID) -> list:
                 .limit(5)
             ).all()
 
-            # Search claims via FTS
-            claim_rows = session.execute(
-                select(Claim.id, Claim.text, Claim.status)
-                .where(
-                    Claim.project_id == project_id,
-                    text("to_tsvector('english', text) @@ plainto_tsquery('english', :q)"),
-                )
-                .params(q=query)
-                .limit(10)
+            # Search RMS beliefs via FTS
+            belief_rows = session.execute(
+                text(
+                    "SELECT id, text, truth_value FROM rms_nodes "
+                    "WHERE project_id = :pid "
+                    "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
+                    "LIMIT 10"
+                ),
+                {"pid": str(project_id), "q": query},
             ).all()
 
         results = {
@@ -69,11 +70,11 @@ def make_tools(project_id: UUID) -> list:
                 }
                 for r in entry_rows
             ],
-            "claims": [
-                {"id": r.id, "text": r.text, "status": r.status} for r in claim_rows
+            "beliefs": [
+                {"id": r.id, "text": r.text, "truth_value": r.truth_value} for r in belief_rows
             ],
         }
-        if not results["entries"] and not results["claims"]:
+        if not results["entries"] and not results["beliefs"]:
             return f"No results found for '{query}'. Try different keywords."
         return json.dumps(results, indent=2)
 
@@ -115,22 +116,12 @@ def make_tools(project_id: UUID) -> list:
 
     @tool
     def list_beliefs(status: str = "IN") -> str:
-        """List beliefs/claims in the knowledge base. Filter by status: IN (accepted), OUT (rejected), STALE, PROPOSED."""
-        with get_sync_session() as session:
-            rows = session.execute(
-                select(Claim.id, Claim.text, Claim.status, Claim.source)
-                .where(Claim.project_id == project_id, Claim.status == status)
-                .order_by(Claim.id)
-                .limit(50)
-            ).all()
-
-        claims = [
-            {"id": r.id, "text": r.text, "status": r.status, "source": r.source}
-            for r in rows
-        ]
-        total_note = f" (showing first 50)" if len(claims) == 50 else ""
-        return f"{len(claims)} beliefs with status={status}{total_note}:\n" + json.dumps(
-            claims, indent=2
+        """List beliefs in the knowledge base. Filter by truth_value: IN (believed) or OUT (retracted)."""
+        result = rms_api.list_nodes(project_id, status=status)
+        nodes = result["nodes"][:50]
+        total_note = f" (showing first 50)" if len(nodes) == 50 else ""
+        return f"{result['count']} beliefs with truth_value={status}{total_note}:\n" + json.dumps(
+            nodes, indent=2
         )
 
     @tool
@@ -188,14 +179,13 @@ def make_tools(project_id: UUID) -> list:
                 .limit(5)
             ).all()
 
-            # Search claims
-            claim_rows = session.execute(
-                select(Claim.id, Claim.text, Claim.status)
-                .where(
-                    Claim.project_id == project_id,
-                    Claim.text.ilike(like_pattern),
-                )
-                .limit(10)
+            # Search RMS beliefs
+            belief_rows = session.execute(
+                text(
+                    "SELECT id, text, truth_value FROM rms_nodes "
+                    "WHERE project_id = :pid AND text ILIKE :pat LIMIT 10"
+                ),
+                {"pid": str(project_id), "pat": like_pattern},
             ).all()
 
         results = {
@@ -215,12 +205,12 @@ def make_tools(project_id: UUID) -> list:
                 }
                 for r in source_rows
             ],
-            "claims": [
-                {"id": r.id, "text": r.text, "status": r.status}
-                for r in claim_rows
+            "beliefs": [
+                {"id": r.id, "text": r.text, "truth_value": r.truth_value}
+                for r in belief_rows
             ],
         }
-        total = len(results["entries"]) + len(results["sources"]) + len(results["claims"])
+        total = len(results["entries"]) + len(results["sources"]) + len(results["beliefs"])
         if total == 0:
             return f"No exact matches for '{pattern}'."
         return json.dumps(results, indent=2)
@@ -256,4 +246,95 @@ def make_tools(project_id: UUID) -> list:
             return f"No semantically similar content found for '{query}'."
         return json.dumps(results, indent=2)
 
-    return [search_knowledge, read_entry, list_entries, list_beliefs, read_source, grep_content, semantic_search]
+    # --- RMS tools (Reason Maintenance System) ---
+
+    @tool
+    def rms_status() -> str:
+        """Show all beliefs in the RMS network with truth values (IN or OUT).
+        Returns node IDs, text, truth values, and justification counts."""
+        result = rms_api.get_status(project_id)
+        return json.dumps(result, indent=2)
+
+    @tool
+    def rms_add(node_id: str, text: str, sl: str = "", unless: str = "",
+                label: str = "", source: str = "") -> str:
+        """Add a belief to the RMS network.
+        Use sl for dependencies (comma-separated node IDs that must be IN).
+        Use unless for outlist (comma-separated node IDs that must be OUT).
+        Without sl or unless, the node is a premise (IN by default)."""
+        result = rms_api.add_node(project_id, node_id, text, sl=sl,
+                                  unless=unless, label=label, source=source)
+        return json.dumps(result)
+
+    @tool
+    def rms_retract(node_id: str) -> str:
+        """Retract a belief and cascade to all dependents.
+        Returns the list of all node IDs whose truth value changed."""
+        result = rms_api.retract_node(project_id, node_id)
+        return json.dumps(result)
+
+    @tool
+    def rms_assert(node_id: str) -> str:
+        """Assert a belief (mark IN) and cascade restoration to dependents.
+        Returns the list of all node IDs whose truth value changed."""
+        result = rms_api.assert_node(project_id, node_id)
+        return json.dumps(result)
+
+    @tool
+    def rms_explain(node_id: str) -> str:
+        """Explain why a belief is IN or OUT by tracing its justification chain.
+        Shows the full dependency path back to premises."""
+        result = rms_api.explain_node(project_id, node_id)
+        return json.dumps(result, indent=2)
+
+    @tool
+    def rms_show(node_id: str) -> str:
+        """Show full details for a belief: text, status, source, justifications, dependents."""
+        result = rms_api.show_node(project_id, node_id)
+        return json.dumps(result, indent=2)
+
+    @tool
+    def rms_search(query: str) -> str:
+        """Search beliefs by text or ID (case-insensitive substring match)."""
+        result = rms_api.search(project_id, query)
+        return json.dumps(result, indent=2)
+
+    @tool
+    def rms_trace(node_id: str) -> str:
+        """Trace backward to find all premises (assumptions) a belief rests on."""
+        result = rms_api.trace_assumptions(project_id, node_id)
+        return json.dumps(result)
+
+    @tool
+    def rms_challenge(target_id: str, reason: str) -> str:
+        """Challenge a belief. Creates a challenge node and the target goes OUT.
+        Use when a reviewer or new evidence disputes a belief."""
+        result = rms_api.challenge(project_id, target_id, reason)
+        return json.dumps(result)
+
+    @tool
+    def rms_defend(target_id: str, challenge_id: str, reason: str) -> str:
+        """Defend a belief against a challenge. Neutralises the challenge, target restored."""
+        result = rms_api.defend(project_id, target_id, challenge_id, reason)
+        return json.dumps(result)
+
+    @tool
+    def rms_nogood(node_ids: list[str]) -> str:
+        """Record a contradiction — these beliefs cannot all be true.
+        Uses dependency-directed backtracking to find and retract the responsible premise."""
+        result = rms_api.add_nogood(project_id, node_ids)
+        return json.dumps(result)
+
+    @tool
+    def rms_compact(budget: int = 500) -> str:
+        """Generate a token-budgeted summary of the belief network.
+        Priority: nogoods first, then OUT nodes, then IN nodes by importance."""
+        return rms_api.compact(project_id, budget=budget)
+
+    return [
+        search_knowledge, read_entry, list_entries, list_beliefs,
+        read_source, grep_content, semantic_search,
+        rms_status, rms_add, rms_retract, rms_assert, rms_explain,
+        rms_show, rms_search, rms_trace, rms_challenge, rms_defend,
+        rms_nogood, rms_compact,
+    ]

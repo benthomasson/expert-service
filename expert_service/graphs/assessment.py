@@ -4,33 +4,27 @@ import hashlib
 from uuid import UUID
 
 from langgraph.graph import END, StateGraph
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from expert_service.core.coverage import match_objectives
 from expert_service.core.exam import run_exam_questions
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Assessment, Claim, Nogood
+from expert_service.db.models import Assessment
 from expert_service.graphs.state import AssessmentState
+from expert_service.rms import api as rms_api
 
 
 def load_beliefs(state: AssessmentState) -> dict:
     """Load all IN beliefs for the project as context."""
     project_id = state["project_id"]
 
-    with get_sync_session() as session:
-        claims = session.execute(
-            select(Claim)
-            .where(
-                Claim.project_id == UUID(project_id),
-                Claim.status == "IN",
-            )
-            .order_by(Claim.id)
-        ).scalars().all()
+    result = rms_api.list_nodes(UUID(project_id), status="IN")
+    nodes = result["nodes"]
 
-    if not claims:
+    if not nodes:
         return {"beliefs_context": "(No IN beliefs found)"}
 
-    context = "\n".join(f"- {c.id}: {c.text}" for c in claims)
+    context = "\n".join(f"- {n['id']}: {n['text']}" for n in nodes)
     return {"beliefs_context": context}
 
 
@@ -85,7 +79,7 @@ def run_exam(state: AssessmentState) -> dict:
         questions, beliefs_context, domain=domain, model=model,
     )
 
-    # Save assessment and nogoods to DB
+    # Save assessment to DB
     with get_sync_session() as session:
         assessment = Assessment(
             project_id=UUID(project_id),
@@ -95,20 +89,6 @@ def run_exam(state: AssessmentState) -> dict:
             score=outcome["score"],
         )
         session.add(assessment)
-
-        # Record nogoods for wrong answers
-        for ng in outcome["nogoods"]:
-            nogood_id = hashlib.sha256(
-                ng["description"].encode()
-            ).hexdigest()[:12]
-            nogood = Nogood(
-                id=nogood_id,
-                project_id=UUID(project_id),
-                description=ng["description"],
-                resolution=ng["resolution"],
-            )
-            session.merge(nogood)
-
         session.commit()
 
     return {

@@ -25,10 +25,14 @@ dependencies = [
     "pgvector>=0.3",
     "langchain>=0.3",
     "langfuse>=3.0.0",
+    "rms @ git+https://github.com/benthomasson/rms",
 ]
 
 [project.scripts]
 expert-service = "expert_service.app:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [build-system]
 requires = ["hatchling"]

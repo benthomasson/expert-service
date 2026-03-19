@@ -10,7 +10,7 @@
 <div class="pipeline-steps">
     <span class="pipeline-step {{ 'done' if stats.sources > 0 else 'pending' }}">Fetch ({{ stats.sources }})</span>
     <span class="pipeline-step {{ 'done' if stats.entries > 0 else 'pending' }}">Summarize ({{ stats.entries }})</span>
-    <span class="pipeline-step {{ 'done' if stats.claims > 0 else 'pending' }}">Beliefs ({{ stats.claims }})</span>
+    <span class="pipeline-step {{ 'done' if stats.beliefs > 0 else 'pending' }}">Beliefs ({{ stats.beliefs }})</span>
     <span class="pipeline-step {{ 'done' if stats.assessments > 0 else 'pending' }}">Assess ({{ stats.assessments }})</span>
 </div>
 
@@ -18,7 +18,7 @@
 <div class="stats-grid">
     <div class="stat-card"><div class="value">{{ stats.sources }}</div><div class="label">Sources</div></div>
     <div class="stat-card"><div class="value">{{ stats.entries }}</div><div class="label">Entries</div></div>
-    <div class="stat-card"><div class="value">{{ stats.claims }}</div><div class="label">Beliefs (IN)</div></div>
+    <div class="stat-card"><div class="value">{{ stats.beliefs }}</div><div class="label">Beliefs (IN)</div></div>
     <div class="stat-card"><div class="value">{{ stats.nogoods }}</div><div class="label">Nogoods</div></div>
 </div>
 

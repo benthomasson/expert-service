@@ -91,10 +91,55 @@ CREATE TABLE IF NOT EXISTS embeddings (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- RMS (Reason Maintenance System) tables
+CREATE TABLE IF NOT EXISTS rms_nodes (
+    id TEXT NOT NULL,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    truth_value TEXT NOT NULL DEFAULT 'IN' CHECK (truth_value IN ('IN', 'OUT')),
+    source TEXT DEFAULT '',
+    source_hash TEXT DEFAULT '',
+    date TEXT DEFAULT '',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (id, project_id)
+);
+
+CREATE TABLE IF NOT EXISTS rms_justifications (
+    id SERIAL PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    project_id UUID NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('SL', 'CP')),
+    antecedents JSONB NOT NULL DEFAULT '[]',
+    outlist JSONB NOT NULL DEFAULT '[]',
+    label TEXT DEFAULT '',
+    FOREIGN KEY (node_id, project_id) REFERENCES rms_nodes(id, project_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS rms_nogoods (
+    id TEXT NOT NULL,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    nodes JSONB NOT NULL DEFAULT '[]',
+    discovered TEXT DEFAULT '',
+    resolution TEXT DEFAULT '',
+    PRIMARY KEY (id, project_id)
+);
+
+CREATE TABLE IF NOT EXISTS rms_propagation_log (
+    id SERIAL PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    timestamp TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    value TEXT NOT NULL
+);
+
 -- Full-text search indexes
 CREATE INDEX IF NOT EXISTS idx_entries_fts ON entries
     USING gin(to_tsvector('english', coalesce(title, '') || ' ' || content));
 CREATE INDEX IF NOT EXISTS idx_claims_fts ON claims
+    USING gin(to_tsvector('english', text));
+CREATE INDEX IF NOT EXISTS idx_rms_nodes_fts ON rms_nodes
     USING gin(to_tsvector('english', text));
 
 -- Common query indexes
@@ -103,5 +148,10 @@ CREATE INDEX IF NOT EXISTS idx_entries_project ON entries(project_id);
 CREATE INDEX IF NOT EXISTS idx_entries_topic ON entries(project_id, topic);
 CREATE INDEX IF NOT EXISTS idx_claims_project ON claims(project_id);
 CREATE INDEX IF NOT EXISTS idx_claims_status ON claims(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_rms_nodes_project ON rms_nodes(project_id);
+CREATE INDEX IF NOT EXISTS idx_rms_nodes_status ON rms_nodes(project_id, truth_value);
+CREATE INDEX IF NOT EXISTS idx_rms_justifications_node ON rms_justifications(node_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_rms_nogoods_project ON rms_nogoods(project_id);
+CREATE INDEX IF NOT EXISTS idx_rms_log_project ON rms_propagation_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id);

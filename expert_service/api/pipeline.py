@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from langgraph.types import Command
 
 from expert_service.db.connection import get_session, get_sync_session
-from expert_service.db.models import Claim, PipelineRun, Project
+from expert_service.db.models import PipelineRun, Project
+from expert_service.rms import api as rms_api
 from expert_service.graphs.assessment import assessment_graph
 from expert_service.graphs.beliefs import get_beliefs_graph
 from expert_service.graphs.ingest import ingest_graph
@@ -239,29 +240,19 @@ async def propose_beliefs(
 
 
 @router.get("/beliefs/proposed")
-async def get_proposed_beliefs(
-    project_id: UUID,
-    session: AsyncSession = Depends(get_session),
-):
-    """Get proposed beliefs awaiting review."""
-    result = await session.execute(
-        select(Claim).where(
-            Claim.project_id == project_id,
-            Claim.status == "PROPOSED",
-            Claim.review_status == "pending",
-        )
+async def get_proposed_beliefs(project_id: UUID):
+    """Get proposed beliefs awaiting review (OUT nodes from the latest proposal)."""
+    result = await asyncio.to_thread(
+        rms_api.list_nodes, project_id, status="OUT"
     )
-    claims = result.scalars().all()
-
     return {
         "beliefs": [
             {
-                "id": c.id,
-                "text": c.text,
-                "source": c.source,
-                "status": c.review_status,
+                "id": n["id"],
+                "text": n["text"],
+                "truth_value": n["truth_value"],
             }
-            for c in claims
+            for n in result["nodes"]
         ]
     }
 

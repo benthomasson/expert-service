@@ -8,7 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expert_service.db.connection import get_session
-from expert_service.db.models import Claim, Entry, Project, Source
+from sqlalchemy import text as sa_text
+
+from expert_service.db.models import Entry, Project, Source
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -27,7 +29,7 @@ class ProjectResponse(BaseModel):
     created_at: str
     source_count: int = 0
     entry_count: int = 0
-    claim_count: int = 0
+    belief_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -48,11 +50,14 @@ async def create_project(data: ProjectCreate, session: AsyncSession = Depends(ge
 
 
 async def _project_counts(session: AsyncSession, project_id):
-    """Get source, entry, and claim counts for a project."""
+    """Get source, entry, and belief counts for a project."""
     src = await session.execute(select(func.count()).where(Source.project_id == project_id))
     ent = await session.execute(select(func.count()).where(Entry.project_id == project_id))
-    clm = await session.execute(select(func.count()).where(Claim.project_id == project_id))
-    return src.scalar() or 0, ent.scalar() or 0, clm.scalar() or 0
+    blf = await session.execute(
+        sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid"),
+        {"pid": str(project_id)},
+    )
+    return src.scalar() or 0, ent.scalar() or 0, blf.scalar() or 0
 
 
 @router.get("")
@@ -70,7 +75,7 @@ async def list_projects(session: AsyncSession = Depends(get_session)):
             created_at=p.created_at.isoformat(),
             source_count=sc,
             entry_count=ec,
-            claim_count=cc,
+            belief_count=cc,
         ))
     return responses
 
@@ -90,7 +95,7 @@ async def get_project(project_id: UUID, session: AsyncSession = Depends(get_sess
         created_at=project.created_at.isoformat(),
         source_count=sc,
         entry_count=ec,
-        claim_count=cc,
+        belief_count=cc,
     )
 
 

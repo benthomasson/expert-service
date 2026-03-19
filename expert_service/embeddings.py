@@ -5,8 +5,10 @@ from uuid import UUID
 from fastembed import TextEmbedding
 from sqlalchemy import delete, select
 
+from sqlalchemy import text as sa_text
+
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Claim, Embedding, Entry, Source
+from expert_service.db.models import Embedding, Entry, Source
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
@@ -47,13 +49,13 @@ def build_embeddings(project_id: UUID) -> dict[str, int]:
             text = f"{e.title}. {e.content}" if e.title else e.content
             items.append(("entries", e.id, e.title or e.id, text))
 
-        # Claims: claim text
-        claims = session.execute(
-            select(Claim.id, Claim.text)
-            .where(Claim.project_id == project_id)
+        # RMS beliefs
+        beliefs = session.execute(
+            sa_text("SELECT id, text FROM rms_nodes WHERE project_id = :pid"),
+            {"pid": str(project_id)},
         ).all()
-        for c in claims:
-            items.append(("claims", c.id, c.text[:80], c.text))
+        for b in beliefs:
+            items.append(("beliefs", b.id, b.text[:80], b.text))
 
         # Sources: slug + truncated content
         sources = session.execute(
@@ -65,7 +67,7 @@ def build_embeddings(project_id: UUID) -> dict[str, int]:
             items.append(("sources", s.slug, s.slug, text))
 
         if not items:
-            return {"entries": 0, "claims": 0, "sources": 0}
+            return {"entries": 0, "beliefs": 0, "sources": 0}
 
         # Batch embed all texts
         texts = [item[3] for item in items]
@@ -83,7 +85,7 @@ def build_embeddings(project_id: UUID) -> dict[str, int]:
 
         session.commit()
 
-    counts = {"entries": len(entries), "claims": len(claims), "sources": len(sources)}
+    counts = {"entries": len(entries), "beliefs": len(beliefs), "sources": len(sources)}
     return counts
 
 

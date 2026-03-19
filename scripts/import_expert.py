@@ -235,7 +235,7 @@ def main():
         print(f"\nProject: {p['name']}")
         print(f"  Sources: {p['source_count']}")
         print(f"  Entries: {p['entry_count']}")
-        print(f"  Claims:  {p['claim_count']}")
+        print(f"  Beliefs: {p['belief_count']}")
 
 
 if __name__ == "__main__":

@@ -8,8 +8,9 @@ from sqlalchemy import select
 
 from expert_service.core.propose import propose_from_entries
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Claim, Entry
+from expert_service.db.models import Entry
 from expert_service.graphs.state import BeliefsState
+from expert_service.rms import api as rms_api
 
 
 def propose_beliefs(state: BeliefsState) -> dict:
@@ -45,19 +46,19 @@ def propose_beliefs(state: BeliefsState) -> dict:
     # Extract beliefs via LLM
     beliefs = propose_from_entries(entry_dicts, model=model, batch_size=batch_size)
 
-    # Write proposed beliefs to claims table
-    with get_sync_session() as session:
-        for belief in beliefs:
-            claim = Claim(
-                id=belief["id"],
-                project_id=UUID(project_id),
+    # Write proposed beliefs as RMS nodes (OUT until accepted)
+    for belief in beliefs:
+        try:
+            rms_api.add_node(
+                UUID(project_id),
+                node_id=belief["id"],
                 text=belief["text"],
-                status="PROPOSED",
                 source=belief.get("source", ""),
-                review_status="pending",
             )
-            session.merge(claim)
-        session.commit()
+            # Mark as OUT until human review accepts
+            rms_api.retract_node(UUID(project_id), belief["id"])
+        except Exception:
+            pass  # Skip duplicates
 
     return {
         "proposed_beliefs": beliefs,
@@ -79,35 +80,23 @@ def human_review(state: BeliefsState) -> dict:
 
 
 def accept_beliefs(state: BeliefsState) -> dict:
-    """Update claims in DB based on review decisions."""
+    """Update RMS nodes based on review decisions."""
     project_id = state["project_id"]
     decisions = state.get("review_decisions", {})
 
     accepted = 0
     rejected = 0
 
-    with get_sync_session() as session:
-        for belief_id, decision in decisions.items():
-            claim = session.execute(
-                select(Claim).where(
-                    Claim.id == belief_id,
-                    Claim.project_id == UUID(project_id),
-                )
-            ).scalar_one_or_none()
-
-            if not claim:
-                continue
-
+    for belief_id, decision in decisions.items():
+        try:
             if decision == "accept":
-                claim.status = "IN"
-                claim.review_status = "accepted"
+                rms_api.assert_node(UUID(project_id), belief_id)
                 accepted += 1
             elif decision == "reject":
-                claim.status = "OUT"
-                claim.review_status = "rejected"
+                # Already OUT from proposal — leave it
                 rejected += 1
-
-        session.commit()
+        except KeyError:
+            continue
 
     return {
         "accepted_count": accepted,
