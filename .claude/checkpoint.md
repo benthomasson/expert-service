@@ -1,54 +1,59 @@
 # Checkpoint
 
-**Saved:** 2026-03-19 15:30
+**Saved:** 2026-03-25 11:45
 **Project:** /Users/ben/git/expert-service
 
 ## Task
 
-Added a meta-expert agent that routes questions across all domain experts, with its own RMS to learn about expert capabilities.
+Migrated expert-service from `rms` to `ftl-reasons`, fixed Jinja2 template errors, fixed garbled multi-expert streaming, and added citation guard to reflection prompt to prevent bad beliefs.
 
 ## Status
 
-- [x] Renamed `_get_checkpointer` → `get_checkpointer` in `chat/agent.py`
-- [x] Created `chat/meta_tools.py` — `list_experts` and `ask_expert` tools
-- [x] Created `chat/meta_agent.py` — agent factory with auto-created project, dynamic system prompt
-- [x] Created `chat/meta_loop.py` — SSE streaming for meta-expert
-- [x] Created `api/meta_chat.py` — `POST /api/meta/chat` endpoint
-- [x] Created `templates/chat/meta_chat.html` — meta-expert chat UI
-- [x] Registered routes in `app.py`, added nav link in `base.html`, added card in `list.html`
-- [x] Added cache invalidation in `projects.py` and `app.py` on project create/delete
-- [ ] Not yet tested — needs `docker compose up -d --build service`
+- [x] Migrated `rms` → `ftl-reasons` (1 dependency + 5 import changes)
+- [x] Fixed Starlette `TemplateResponse` API (7 calls updated to new convention)
+- [x] Fixed Colima disk space (removed 50GB langfuse volumes, installed qemu)
+- [x] Fixed garbled multi-expert streaming (`awaiting_tools` flag in `meta_loop.py`)
+- [x] Fixed reflection prompt — only record cited positive knowledge
+- [x] Retracted bad beliefs: `openshift-expert-lacks-aap-install-docs`, `rhel-expert-knows-firewalld-management`, `rhel-expert-knows-systemctl-commands`, `aap-expert-knows-ansible-firewalld-module`
+- [x] Smoke tested: AAP install, AAP on OpenShift, firewall on RHEL, Ansible+firewall, Ansible+OpenShift
+- [x] All commits pushed to github
 
 ## Key Files
 
-- `expert_service/chat/meta_tools.py` — `make_meta_tools(experts_map, model)` with `list_experts` (sync) and `ask_expert` (async, invokes sub-agent)
-- `expert_service/chat/meta_agent.py` — `get_meta_agent(model)`, `_ensure_meta_project()`, dynamic system prompt, `invalidate_meta_cache()`
-- `expert_service/chat/meta_loop.py` — `meta_chat_stream(model, message, thread_id)` mirrors loop.py
-- `expert_service/api/meta_chat.py` — `POST /api/meta/chat` SSE endpoint
-- `expert_service/templates/chat/meta_chat.html` — meta-expert chat UI with cross-project citation verification
-- `expert_service/chat/agent.py` — renamed `get_checkpointer()` (was private)
-- `expert_service/api/projects.py` — added `invalidate_meta_cache()` on create/delete
-- `expert_service/app.py` — registered meta_chat.router, added `/meta/chat` web route
+- `expert_service/chat/meta_loop.py` — SSE streaming + reflection prompt. Two fixes: `awaiting_tools` flag prevents interleaved tokens; reflection prompt requires cited sources before recording beliefs
+- `expert_service/rms/api.py` — `rms_lib` → `reasons_lib` (3 imports)
+- `expert_service/rms/pg_storage.py` — `rms_lib` → `reasons_lib` (2 imports)
+- `expert_service/app.py` — `TemplateResponse(request, "name.html", {})` new API (7 calls)
+- `pyproject.toml` — `ftl-reasons` replaces `rms @ git+...`
+- `expert_service/config.py` — DB defaults on port 5432, Docker exposes on 5433
 
 ## Commands
 
 ```bash
-# Rebuild and test
-source ~/git/expert-service/.env && cd ~/git/expert-service && docker compose up -d --build service
+# Run RMS operations against Docker PG from host
+DATABASE_URL_SYNC="postgresql+psycopg://expert:expert_dev@localhost:5433/expert_service" uv run python3 -c "
+from expert_service.rms.api import search, retract_node
+from uuid import UUID
+pid = UUID('b3ba781a-7a17-459a-9436-6531a35774bc')  # meta-expert
+search(pid, 'knows')
+"
 
-# Check meta-expert project was created
-docker compose exec postgres psql -U expert -d expert_service -c "SELECT id, name, domain FROM projects WHERE name = 'meta-expert';"
+# Rebuild and start
+docker compose up -d --build
+
+# Check Colima disk
+colima ssh -- df -h /
 ```
 
 ## Next Step
 
-Build and test the meta-expert. Navigate to `/meta/chat` and ask a question that should route to one of the domain experts.
+Continue exercising expert-service with ftl-reasons this week (days 2-5 of migration plan). Test retraction cascades, nogood detection, and cross-expert contradictions. Consider adding a programmatic citation check in the reflection step (not just prompt-based) for stronger enforcement.
 
 ## Context
 
-- The meta-expert is a regular project (auto-created on first agent access) with domain "Expert routing and cross-domain knowledge synthesis"
-- It gets all 19 standard tools (search, RMS, entries, etc.) scoped to its own project PLUS 2 meta tools
-- `ask_expert` is async — uses `agent.ainvoke()` with ephemeral threads to get complete answers from sub-agents
-- The meta-expert's system prompt dynamically lists available experts
-- Cache invalidation clears `_meta_agents` dict when projects are created/deleted
-- `GOOGLE_CLOUD_PROJECT=redhat-ai-analysis` must be set (source .env) before docker compose up
+- **ftl-reasons 0.3.0** installed, `rms 0.1.0` removed. Same API, `reasons_lib` instead of `rms_lib`.
+- **Colima disk**: Was 96G/96G full. Removed langfuse volumes (50GB). Now ~48GB free. Installed qemu via brew but Colima uses VZ driver so disk resize didn't work — just freed space instead.
+- **Reflection prompt evolution**: v1 recorded everything → v2 blocked negative/transient → v3 requires cited sources. v3 is working: uncited answers (firewall on RHEL) correctly skipped, cited answers (OpenShift RHCOS) correctly recorded.
+- **Two-layer insight confirmed**: LLM general knowledge fills gaps (correct firewall answer without citations), but only expert knowledge base citations get tracked as beliefs. This is the probabilistic+exact architecture working.
+- **Project IDs**: meta-expert=`b3ba781a`, aap-expert=`a037a6a3`, rhel-expert=`6e82621f`, openshift-expert=`23c26c17`
+- **Latest commit**: `4fb30eb` — Fix garbled multi-expert streaming and prevent uncited belief recording
