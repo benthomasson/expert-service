@@ -25,7 +25,7 @@ dependencies = [
     "pgvector>=0.3",
     "langchain>=0.3",
     "langfuse>=3.0.0",
-    "rms @ git+https://github.com/benthomasson/rms",
+    "ftl-reasons",
 ]
 
 [project.scripts]

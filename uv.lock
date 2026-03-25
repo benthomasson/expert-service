@@ -395,6 +395,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "fastapi" },
     { name = "fastembed" },
+    { name = "ftl-reasons" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "langchain" },
@@ -407,7 +408,6 @@ dependencies = [
     { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "python-multipart" },
-    { name = "rms" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -419,6 +419,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastembed", specifier = ">=0.7.4" },
+    { name = "ftl-reasons" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "langchain", specifier = ">=0.3" },
@@ -431,7 +432,6 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "rms", git = "https://github.com/benthomasson/rms" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
@@ -497,6 +497,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/51/7c/f60c259dcbf4f0c47cc4ddb8f7720d2dcdc8888c8e5ad84c73ea4531cc5b/fsspec-2026.2.0.tar.gz", hash = "sha256:6544e34b16869f5aacd5b90bdf1a71acb37792ea3ddf6125ee69a22a53fb8bff", size = 313441, upload-time = "2026-02-05T21:50:53.743Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/ab/fb21f4c939bb440104cc2b396d3be1d9b7a9fd3c6c2a53d98c45b3d7c954/fsspec-2026.2.0-py3-none-any.whl", hash = "sha256:98de475b5cb3bd66bedd5c4679e87b4fdfe1a3bf4d707b151b3c07e58c9a2437", size = 202505, upload-time = "2026-02-05T21:50:51.819Z" },
+]
+
+[[package]]
+name = "ftl-reasons"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/e6/f7f8612b1254b4eff498ce548e76b927048ed8b75c1adf5565c6e6053de7/ftl_reasons-0.3.0.tar.gz", hash = "sha256:e17421a291cde9190f5034a3ef93867e89c7f5e9acb7ae90b5c57191762b4fc5", size = 39532, upload-time = "2026-03-23T07:54:00.778Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/d8/a8431efabfcad30e42994cb191d819f49497d52b56de62b551e8e9036105/ftl_reasons-0.3.0-py3-none-any.whl", hash = "sha256:65523a778aa2f039b694d4d04916233341d66ce621839be682f30097579da165", size = 30119, upload-time = "2026-03-23T07:54:01.658Z" },
 ]
 
 [[package]]
@@ -2404,11 +2413,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/25/b208c5683343959b670dc001595f2f3737e051da617f66c31f7c4fa93abc/rich-14.3.3-py3-none-any.whl", hash = "sha256:793431c1f8619afa7d3b52b2cdec859562b950ea0d4b6b505397612db8d5362d", size = 310458, upload-time = "2026-02-19T17:23:13.732Z" },
 ]
-
-[[package]]
-name = "rms"
-version = "0.1.0"
-source = { git = "https://github.com/benthomasson/rms#782c3d2ead51627243434bf85ac2ed4c1b6e9c45" }
 
 [[package]]
 name = "rsa"

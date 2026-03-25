@@ -10,8 +10,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session as SyncSession
 
-from rms_lib import Justification, Node, Nogood
-from rms_lib.network import Network
+from reasons_lib import Justification, Node, Nogood
+from reasons_lib.network import Network
 
 
 class PgStorage:

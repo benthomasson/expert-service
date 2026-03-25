@@ -8,8 +8,8 @@ loads the network, operates, saves, and closes.
 import json
 from uuid import UUID
 
-from rms_lib import Justification
-from rms_lib.network import Network
+from reasons_lib import Justification
+from reasons_lib.network import Network
 
 from expert_service.db.connection import get_sync_session
 from .pg_storage import PgStorage
@@ -218,7 +218,7 @@ def list_nodes(
 
 def compact(project_id: UUID, budget: int = 500) -> str:
     """Generate a token-budgeted summary of the belief network."""
-    from rms_lib.compact import compact as _compact
+    from reasons_lib.compact import compact as _compact
 
     with _with_network(project_id) as net:
         return _compact(net, budget=budget, truncate=True)

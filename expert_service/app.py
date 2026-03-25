@@ -61,8 +61,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
             "belief_count": belief_count or 0,
         })
 
-    return templates.TemplateResponse("projects/list.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "projects/list.html", {
         "projects": projects_with_stats,
     })
 
@@ -77,15 +76,14 @@ async def meta_chat_page(request: Request, session: AsyncSession = Depends(get_s
         for p in project_list
         if p.name != "meta-expert"
     ]
-    return templates.TemplateResponse("chat/meta_chat.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "chat/meta_chat.html", {
         "experts": experts,
     })
 
 
 @app.get("/projects/new", response_class=HTMLResponse)
 async def new_project_form(request: Request):
-    return templates.TemplateResponse("projects/create.html", {"request": request})
+    return templates.TemplateResponse(request, "projects/create.html")
 
 
 @app.post("/projects/new")
@@ -144,8 +142,7 @@ async def project_detail(
     for e in entries:
         e["created_at"] = e["created_at"].isoformat() if e["created_at"] else ""
 
-    return templates.TemplateResponse("projects/detail.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "projects/detail.html", {
         "project": {"id": project_id, "name": project.name, "domain": project.domain},
         "stats": stats,
         "entries": entries,
@@ -161,8 +158,7 @@ async def chat_page(request: Request, project_id: UUID, session: AsyncSession = 
     # Redirect meta-expert project chat to the dedicated meta-expert UI
     if project.name == "meta-expert":
         return RedirectResponse("/meta/chat", status_code=303)
-    return templates.TemplateResponse("chat/chat.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "chat/chat.html", {
         "project": {"id": project_id, "name": project.name, "domain": project.domain},
     })
 
@@ -173,8 +169,7 @@ async def ingest_form(request: Request, project_id: UUID, session: AsyncSession 
     project = result.scalar_one_or_none()
     if not project:
         return HTMLResponse("Project not found", status_code=404)
-    return templates.TemplateResponse("ingest/form.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "ingest/form.html", {
         "project": {"id": project_id, "name": project.name},
     })
 
@@ -194,8 +189,7 @@ async def beliefs_review_page(
     out_result = await asyncio.to_thread(rms_api.list_nodes, project_id, status="OUT")
     beliefs = out_result["nodes"]
 
-    return templates.TemplateResponse("beliefs/review.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "beliefs/review.html", {
         "project": {"id": project_id, "name": project.name},
         "beliefs": [{"id": b["id"], "text": b["text"], "source": ""} for b in beliefs],
     })
