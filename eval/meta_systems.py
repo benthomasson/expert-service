@@ -1,6 +1,7 @@
 """Meta-expert evaluation driver — calls /api/meta/chat and captures routing."""
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -9,6 +10,25 @@ import httpx
 
 from eval.systems import DriverResponse
 
+# Patterns for extracting citation-like references from text.
+# Named IDs must contain a hyphen (to distinguish from plain English words).
+# Hex hashes must contain at least one digit.
+CITATION_PATTERNS = [
+    r'belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._]*-[a-z0-9._-]*)',  # belief: some-id (must contain hyphen)
+    r'entry[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._]*[-/][a-z0-9._/-]*)',  # entry: some/path or some-id
+    r'source[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._]*[-/][a-z0-9._/-]*)',  # source: some/path or some-id
+    r'\b((?=[a-f0-9]*[0-9])[a-f0-9]{8,12})\b',  # hex hashes (8-12 chars, must contain a digit)
+]
+
+
+def extract_citations(text: str) -> list[str]:
+    """Extract citation references from text using multiple patterns."""
+    citations = []
+    for pattern in CITATION_PATTERNS:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        citations.extend(m.lower().rstrip(".,;:") for m in matches)
+    return list(dict.fromkeys(citations))  # dedupe preserving order
+
 
 @dataclass
 class MetaResponse(DriverResponse):
@@ -16,6 +36,8 @@ class MetaResponse(DriverResponse):
     experts_consulted: list[str] = field(default_factory=list)
     reflection_calls: list[dict] = field(default_factory=list)
     expert_citations: list[str] = field(default_factory=list)
+    tool_results: list[dict] = field(default_factory=list)
+    expert_answer_citations: list[str] = field(default_factory=list)
 
 
 class MetaExpertDriver:
@@ -39,6 +61,7 @@ class MetaExpertDriver:
 
         tokens: list[str] = []
         tool_calls: list[dict] = []
+        tool_results: list[dict] = []
         experts_consulted: list[str] = []
         reflection_calls: list[dict] = []
         current_event: str | None = None
@@ -71,6 +94,12 @@ class MetaExpertDriver:
                                 if expert and expert not in experts_consulted:
                                     experts_consulted.append(expert)
 
+                        elif current_event == "tool_result":
+                            tool_results.append({
+                                "name": data.get("name", "unknown"),
+                                "summary": data.get("summary", ""),
+                            })
+
                         elif current_event == "reflection":
                             reflection_calls.append({
                                 "name": data.get("name", "unknown"),
@@ -87,10 +116,12 @@ class MetaExpertDriver:
         elapsed = time.monotonic() - t0
         answer_text = "".join(tokens)
 
-        # Extract citation references from the answer
-        import re
-        citations = re.findall(r'belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)', answer_text, re.IGNORECASE)
-        citations = [c.lower().rstrip(".,;:") for c in citations]
+        # Extract citations from the final answer
+        final_citations = extract_citations(answer_text)
+
+        # Extract citations from expert answers (tool_result summaries)
+        expert_text = " ".join(tr["summary"] for tr in tool_results if tr["name"] == "ask_expert")
+        expert_answer_cites = extract_citations(expert_text)
 
         return MetaResponse(
             text=answer_text,
@@ -98,5 +129,7 @@ class MetaExpertDriver:
             latency_seconds=elapsed,
             experts_consulted=experts_consulted,
             reflection_calls=reflection_calls,
-            expert_citations=list(dict.fromkeys(citations)),  # dedupe preserving order
+            expert_citations=final_citations,
+            tool_results=tool_results,
+            expert_answer_citations=expert_answer_cites,
         )
