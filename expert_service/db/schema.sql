@@ -142,6 +142,13 @@ CREATE TABLE IF NOT EXISTS rms_propagation_log (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rms_network_meta (
+    key TEXT NOT NULL,
+    project_id UUID NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (key, project_id)
+);
+
 -- Full-text search indexes
 CREATE INDEX IF NOT EXISTS idx_entries_fts ON entries
     USING gin(to_tsvector('english', coalesce(title, '') || ' ' || content));
@@ -161,6 +168,8 @@ CREATE INDEX IF NOT EXISTS idx_rms_nodes_status ON rms_nodes(project_id, truth_v
 CREATE INDEX IF NOT EXISTS idx_rms_justifications_node ON rms_justifications(node_id, project_id);
 CREATE INDEX IF NOT EXISTS idx_rms_nogoods_project ON rms_nogoods(project_id);
 CREATE INDEX IF NOT EXISTS idx_rms_log_project ON rms_propagation_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_rms_justifications_antecedents ON rms_justifications USING gin(antecedents);
+CREATE INDEX IF NOT EXISTS idx_rms_justifications_outlist ON rms_justifications USING gin(outlist);
 CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id);
 CREATE INDEX IF NOT EXISTS idx_entry_sources_entry ON entry_sources(entry_id, entry_project_id);
