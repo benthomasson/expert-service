@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from expert_service.api import projects, pipeline, data, chat, meta_chat
+from expert_service.api import projects, pipeline, data, chat, meta_chat, ask
 from expert_service.db.connection import get_session
 from expert_service.db.models import Assessment, Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
@@ -25,6 +25,7 @@ app.include_router(pipeline.router)
 app.include_router(data.router)
 app.include_router(chat.router)
 app.include_router(meta_chat.router)
+app.include_router(ask.router)
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

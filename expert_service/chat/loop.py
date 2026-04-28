@@ -5,10 +5,36 @@ import logging
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
+from sqlalchemy import text as sa_text
+
 from expert_service.chat.agent import get_agent
 from expert_service.config import settings
+from expert_service.db.connection import get_sync_session
 
 logger = logging.getLogger(__name__)
+
+
+def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> str:
+    """Fast belief pre-check via PostgreSQL tsvector. Returns compact format."""
+    with get_sync_session() as session:
+        rows = session.execute(
+            sa_text(
+                "SELECT id, text, truth_value "
+                "FROM rms_nodes "
+                "WHERE project_id = :pid "
+                "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
+                "ORDER BY ts_rank(to_tsvector('english', text), "
+                "         plainto_tsquery('english', :q)) DESC "
+                "LIMIT :lim"
+            ),
+            {"pid": str(project_id), "q": question, "lim": limit},
+        ).all()
+
+    if not rows:
+        return ""
+    return "\n".join(
+        f"[{r.truth_value}] {r.id} — {r.text}" for r in rows
+    )
 
 
 def _extract_text(content) -> str:
@@ -48,7 +74,17 @@ async def chat_stream(
 
         config["callbacks"] = [CallbackHandler()]
 
-    inputs = {"messages": [{"role": "user", "content": message}]}
+    # Belief-first pre-check: inject matching beliefs so the LLM can
+    # answer directly without a tool call when beliefs are sufficient.
+    belief_context = _quick_belief_search(project_id, message)
+    if belief_context:
+        augmented = f"{message}\n\n[Belief matches:\n{belief_context}\n]"
+        logger.info("Belief pre-check: %d matches for %r",
+                     belief_context.count("\n") + 1, message[:60])
+    else:
+        augmented = message
+
+    inputs = {"messages": [{"role": "user", "content": augmented}]}
 
     buffered_tokens: list[str] = []
 

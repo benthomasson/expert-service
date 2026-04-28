@@ -334,9 +334,15 @@ def make_tools(project_id: UUID) -> list:
 
     @tool
     def rms_search(query: str) -> str:
-        """Search beliefs by text or ID (case-insensitive substring match)."""
+        """Search beliefs by keyword (full-text search). Returns compact one-line-per-belief format."""
         result = rms_api.search(project_id, query)
-        return json.dumps(result, indent=2)
+        if not result["results"]:
+            return f"No beliefs match '{query}'."
+        lines = [
+            f"[{r['truth_value']}] {r['id']} — {r['text']}"
+            for r in result["results"]
+        ]
+        return "\n".join(lines)
 
     @tool
     def rms_trace(node_id: str) -> str:
