@@ -25,7 +25,7 @@ dependencies = [
     "pgvector>=0.3",
     "langchain>=0.3",
     "langfuse>=3.0.0",
-    "ftl-reasons",
+    "ftl-reasons>=0.20.0",
 ]
 
 [project.scripts]
