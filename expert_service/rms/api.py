@@ -7,8 +7,10 @@ instead of loading/saving the entire network per call.
 from uuid import UUID
 
 from reasons_lib.pg import PgApi
+from sqlalchemy import text
 
 from expert_service.config import settings
+from expert_service.db.connection import get_sync_session
 
 
 def _conninfo() -> str:
@@ -127,3 +129,78 @@ def compact(project_id: UUID, budget: int = 500) -> str:
     """Generate a token-budgeted summary of the belief network."""
     with _api(project_id) as api:
         return api.compact(budget=budget)
+
+
+def list_gated(project_id: UUID) -> dict:
+    """Find OUT beliefs blocked by IN outlist nodes (active gates)."""
+    with _api(project_id) as api:
+        return api.list_gated()
+
+
+def what_if_retract(project_id: UUID, node_id: str) -> dict:
+    """Simulate retracting a node — shows cascade without modifying the database."""
+    with _api(project_id) as api:
+        return api.what_if_retract(node_id)
+
+
+def what_if_assert(project_id: UUID, node_id: str) -> dict:
+    """Simulate asserting a node — shows cascade without modifying the database."""
+    with _api(project_id) as api:
+        return api.what_if_assert(node_id)
+
+
+# Keywords that suggest a belief describes a problem, defect, or risk.
+# Matches reasons_lib.api.NEGATIVE_TERMS.
+_NEGATIVE_TERMS = [
+    'bug', 'defect', 'missing', 'fail', 'error', 'broken', 'incorrect',
+    'wrong', 'risk', 'gap', 'lack', 'vulnerable', 'insecure', 'stale',
+    'outdated', 'deprecated', 'fragile', 'brittle', 'hack', 'workaround',
+    'technical debt', 'tech debt', 'not implemented', 'unimplemented',
+    'incomplete', 'inconsistent', 'unclear', 'confusing', 'problem',
+    'issue', 'concern', 'warning', 'danger', 'threat', 'weakness',
+    'limitation', 'constraint', 'bottleneck', 'blocker', 'obstacle',
+    'undermines', 'concentrated', 'single point of failure', 'no tests',
+    'untested', 'not tested', 'hard-coded', 'hardcoded', 'tight coupling',
+    'tightly coupled', 'monolithic', 'legacy', 'unmaintained',
+    'worsening', 'decay', 'degradation', 'fragmentation', 'opacity',
+    'ungoverned', 'unrecoverable', 'unverifiable', 'deadlock', 'paradox',
+]
+
+
+def list_negative_candidates(project_id: UUID) -> dict:
+    """Find IN beliefs whose text matches negative-sentiment keywords.
+
+    Returns candidates only — the chat agent classifies which are genuinely
+    negative vs. beliefs that merely describe error-handling mechanisms.
+    """
+    # Build SQL ILIKE OR chain
+    conditions = " OR ".join(
+        f"lower(text) LIKE :t{i}" for i in range(len(_NEGATIVE_TERMS))
+    )
+    params = {f"t{i}": f"%{term}%" for i, term in enumerate(_NEGATIVE_TERMS)}
+    params["pid"] = str(project_id)
+
+    with get_sync_session() as session:
+        total = session.execute(
+            text(
+                "SELECT count(*) FROM rms_nodes "
+                "WHERE project_id = :pid AND truth_value = 'IN'"
+            ),
+            {"pid": params["pid"]},
+        ).scalar()
+
+        rows = session.execute(
+            text(
+                f"SELECT id, text FROM rms_nodes "
+                f"WHERE project_id = :pid AND truth_value = 'IN' "
+                f"AND ({conditions}) "
+                f"ORDER BY id"
+            ),
+            params,
+        ).all()
+
+    return {
+        "candidates": [{"id": r.id, "text": r.text} for r in rows],
+        "candidate_count": len(rows),
+        "total_in": total or 0,
+    }

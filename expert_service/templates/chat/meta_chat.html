@@ -246,7 +246,8 @@ function extractCitations(text) {
     const citations = { beliefs: [], entries: [], sources: [] };
 
     // Match belief citations: belief: rhel9-foo, belief ID: rhel9-foo, belief ID rhel9-foo
-    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
+    // Include colon for namespaced IDs like operations:q2-validates-framework
+    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._:-]*)/gi;
     let match;
     while ((match = beliefPattern.exec(cleaned)) !== null) {
         // Strip trailing punctuation (periods, commas at end of sentences)
@@ -290,7 +291,7 @@ async function verifyCitations(button, citations) {
         // Try each expert's project to find the belief
         for (const [name, projectId] of Object.entries(expertsMap)) {
             try {
-                const r = await fetch(`/api/projects/${projectId}/beliefs/${id}`);
+                const r = await fetch(`/api/projects/${projectId}/beliefs/${encodeURIComponent(id)}`);
                 const data = await r.json();
                 if (!data.error && !data.detail) {
                     return { type: 'belief', id, data, ok: true, expert: name };

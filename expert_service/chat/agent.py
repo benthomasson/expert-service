@@ -37,9 +37,11 @@ RMS tools:
 - rms_challenge/rms_defend: dialectical argumentation
 - rms_nogood: record contradictions with automatic backtracking resolution
 - rms_compact: token-budgeted belief network summary
+- rms_find_issues: find blocked beliefs (gated by active problems) and beliefs describing problems/risks
+- rms_what_if: simulate retract/assert to see cascade impact without modifying the database
 
 Answer rules:
-- Cite entry IDs or belief IDs when referencing knowledge.
+- Cite belief IDs inline next to the claim they support, e.g. "The migration requires downtime (belief: rhel9-migration-requires-downtime)." Do NOT collect citations at the end of your answer — that causes hallucinated IDs.
 - When information is partial, share what you found and note what's missing.
 - Be concise and direct."""
 

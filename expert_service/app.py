@@ -1,6 +1,7 @@
 """FastAPI application — API + web UI for expert-service."""
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -161,6 +162,33 @@ async def chat_page(request: Request, project_id: UUID, session: AsyncSession = 
         return RedirectResponse("/meta/chat", status_code=303)
     return templates.TemplateResponse(request, "chat/chat.html", {
         "project": {"id": project_id, "name": project.name, "domain": project.domain},
+    })
+
+
+@app.get("/projects/{project_id}/entries/{entry_id}/report", response_class=HTMLResponse)
+async def entry_report(
+    request: Request,
+    project_id: UUID,
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Render an entry as an interactive report with Explain/What-if buttons on belief references."""
+    project = (await session.execute(
+        select(Project).where(Project.id == project_id)
+    )).scalar_one_or_none()
+    if not project:
+        return HTMLResponse("Project not found", status_code=404)
+
+    entry = (await session.execute(
+        select(Entry).where(Entry.project_id == project_id, Entry.id == entry_id)
+    )).scalar_one_or_none()
+    if not entry:
+        return HTMLResponse("Entry not found", status_code=404)
+
+    return templates.TemplateResponse(request, "reports/view.html", {
+        "project": {"id": project_id, "name": project.name},
+        "entry": {"id": entry.id, "title": entry.title, "topic": entry.topic},
+        "content_json": json.dumps(entry.content),
     })
 
 

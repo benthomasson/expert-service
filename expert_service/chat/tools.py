@@ -376,10 +376,78 @@ def make_tools(project_id: UUID) -> list:
         Priority: nogoods first, then OUT nodes, then IN nodes by importance."""
         return rms_api.compact(project_id, budget=budget)
 
+    @tool
+    def rms_find_issues() -> str:
+        """Find issues in the belief network: blocked beliefs (gated by active problems)
+        and beliefs that describe problems/defects/risks. Review the candidates and
+        identify which are genuinely negative vs. beliefs that merely describe mechanisms."""
+        gated = rms_api.list_gated(project_id)
+        negative = rms_api.list_negative_candidates(project_id)
+
+        parts = []
+
+        if gated["blocker_count"] > 0:
+            parts.append(f"## Blocked Beliefs ({gated['gated_count']} gated by {gated['blocker_count']} blockers)\n")
+            for blocker_id, info in sorted(gated["blockers"].items()):
+                parts.append(f"[BLOCKER] {blocker_id} — {info['text']}")
+                for g in info["gated"]:
+                    parts.append(f"  ⊢ {g['id']}: {g['text']}")
+                parts.append("")
+        else:
+            parts.append("## Blocked Beliefs\nNone — all gated beliefs are satisfied.\n")
+
+        if negative["candidate_count"] > 0:
+            shown = negative["candidates"][:50]
+            remaining = negative["candidate_count"] - len(shown)
+            parts.append(f"## Negative Belief Candidates ({negative['candidate_count']} of {negative['total_in']} IN beliefs)\n")
+            parts.append("Classify which are genuinely negative (problems/risks) vs. descriptions of mechanisms:\n")
+            for c in shown:
+                parts.append(f"[-?] {c['id']} — {c['text']}")
+            if remaining > 0:
+                parts.append(f"\n... and {remaining} more candidates (use rms_search to explore specific topics)")
+        else:
+            parts.append("## Negative Belief Candidates\nNo keyword matches found.\n")
+
+        return "\n".join(parts)
+
+    @tool
+    def rms_what_if(node_id: str, action: str = "retract") -> str:
+        """Simulate retracting or asserting a belief WITHOUT modifying the database.
+        Shows what would cascade: which beliefs would go OUT, which would be restored.
+        Use this to assess the impact of resolving a blocker before taking action.
+        action: 'retract' (default) or 'assert'."""
+        if action == "assert":
+            result = rms_api.what_if_assert(project_id, node_id)
+            already = result.get("already_in")
+            if already:
+                return f"{node_id} is already IN — no cascade."
+        else:
+            result = rms_api.what_if_retract(project_id, node_id)
+            already = result.get("already_out")
+            if already:
+                return f"{node_id} is already OUT — no cascade."
+
+        parts = [f"## What-if {action} {node_id}\n"]
+
+        if result["retracted"]:
+            parts.append(f"Would retract ({len(result['retracted'])} nodes):")
+            for r in result["retracted"]:
+                parts.append(f"  OUT depth={r['depth']} ({r['dependents']} deps) {r['id']} — {r['text']}")
+            parts.append("")
+
+        if result["restored"]:
+            parts.append(f"Would restore ({len(result['restored'])} nodes):")
+            for r in result["restored"]:
+                parts.append(f"  IN  depth={r['depth']} ({r['dependents']} deps) {r['id']} — {r['text']}")
+            parts.append("")
+
+        parts.append(f"Total affected: {result['total_affected']}")
+        return "\n".join(parts)
+
     return [
         search_knowledge, read_entry, list_entries, list_beliefs,
         read_source, list_source_entries, grep_content, semantic_search,
         rms_status, rms_add, rms_retract, rms_assert, rms_explain,
         rms_show, rms_search, rms_trace, rms_challenge, rms_defend,
-        rms_nogood, rms_compact,
+        rms_nogood, rms_compact, rms_find_issues, rms_what_if,
     ]

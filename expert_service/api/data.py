@@ -134,6 +134,14 @@ async def beliefs_status(project_id: UUID):
     return result
 
 
+@router.get("/issues")
+async def find_issues(project_id: UUID):
+    """Find issues in the belief network: gated beliefs and negative candidates."""
+    gated = await asyncio.to_thread(rms_api.list_gated, project_id)
+    negative = await asyncio.to_thread(rms_api.list_negative_candidates, project_id)
+    return {"gated": gated, "negative": negative}
+
+
 @router.get("/beliefs/{node_id}")
 async def get_belief(project_id: UUID, node_id: str):
     result = await asyncio.to_thread(rms_api.show_node, project_id, node_id)
@@ -143,6 +151,15 @@ async def get_belief(project_id: UUID, node_id: str):
 @router.get("/beliefs/{node_id}/explain")
 async def explain_belief(project_id: UUID, node_id: str):
     result = await asyncio.to_thread(rms_api.explain_node, project_id, node_id)
+    return result
+
+
+@router.get("/beliefs/{node_id}/what-if")
+async def what_if_belief(project_id: UUID, node_id: str, action: str = "retract"):
+    if action == "assert":
+        result = await asyncio.to_thread(rms_api.what_if_assert, project_id, node_id)
+    else:
+        result = await asyncio.to_thread(rms_api.what_if_retract, project_id, node_id)
     return result
 
 

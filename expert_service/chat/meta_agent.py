@@ -84,7 +84,7 @@ Routing rules:
 Answer rules:
 - Synthesize the expert's answer in your own words. Do NOT repeat the expert's response verbatim — rephrase and summarize.
 - Mention which expert you consulted (e.g., "The RHEL expert confirms that...").
-- Preserve belief ID and entry ID citations from the expert's answer using the format: belief: <id>
+- Preserve belief ID and entry ID citations from the expert's answer inline next to each claim, e.g. "The migration requires downtime (belief: rhel9-migration-requires-downtime)." Do NOT move citations to the end of your answer — that causes hallucinated IDs.
 - Be concise and direct. One clear answer, not a duplicate.
 - Do NOT narrate tool usage. No "Let me search..." — just call tools and answer.
 

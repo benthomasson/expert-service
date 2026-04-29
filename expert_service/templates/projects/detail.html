@@ -38,7 +38,7 @@
         {% for e in entries[:10] %}
         <tr>
             <td><code>{{ e.topic }}</code></td>
-            <td>{{ e.title or '—' }}</td>
+            <td><a href="/projects/{{ project.id }}/entries/{{ e.id }}/report">{{ e.title or '—' }}</a></td>
             <td>{{ e.created_at[:10] }}</td>
         </tr>
         {% endfor %}

@@ -209,7 +209,8 @@ function extractCitations(text) {
     const cleaned = text.replace(/```[\s\S]*?```/g, '').replace(/`/g, '');
     const citations = { beliefs: [], entries: [], sources: [] };
 
-    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._-]*)/gi;
+    // Include colon for namespaced IDs like operations:q2-validates-framework
+    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._:-]*)/gi;
     let match;
     while ((match = beliefPattern.exec(cleaned)) !== null) {
         // Strip trailing punctuation (periods, commas at end of sentences)
@@ -228,7 +229,9 @@ function extractCitations(text) {
     }
 
     // Match source references: Source: <slug> or (Source: <slug>)
-    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*)/gi;
+    // Require slug to contain a dot or hyphen to avoid matching bare agent names
+    // like "operations" from belief source fields
+    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*[._-][a-z0-9._-]*)/gi;
     while ((match = sourcePattern.exec(cleaned)) !== null) {
         const slug = match[1].replace(/[.,;:)+]+$/, '');
         if (slug && !citations.sources.includes(slug)) {
@@ -247,7 +250,7 @@ async function verifyCitations(button, citations) {
     if (existingPanel) existingPanel.remove();
 
     const beliefPromises = citations.beliefs.map(id =>
-        fetch(`/api/projects/${projectId}/beliefs/${id}`)
+        fetch(`/api/projects/${projectId}/beliefs/${encodeURIComponent(id)}`)
             .then(r => r.json())
             .then(data => ({ type: 'belief', id, data, ok: !data.error && !data.detail }))
             .catch(() => ({ type: 'belief', id, data: null, ok: false }))
