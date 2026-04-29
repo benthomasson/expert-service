@@ -265,7 +265,9 @@ function extractCitations(text) {
     }
 
     // Match source references: Source: <slug> or (Source: <slug>)
-    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*)/gi;
+    // Require slug to contain a dot or hyphen to avoid matching bare agent names
+    // like "operations" from belief source fields
+    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*[._-][a-z0-9._-]*)/gi;
     while ((match = sourcePattern.exec(cleaned)) !== null) {
         const slug = match[1].replace(/[.,;:)+]+$/, '');
         if (slug && !citations.sources.includes(slug)) {

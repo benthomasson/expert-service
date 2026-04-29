@@ -419,7 +419,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastembed", specifier = ">=0.7.4" },
-    { name = "ftl-reasons" },
+    { name = "ftl-reasons", git = "https://github.com/benthomasson/ftl-reasons.git?rev=main" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "langchain", specifier = ">=0.3" },
@@ -501,12 +501,8 @@ wheels = [
 
 [[package]]
 name = "ftl-reasons"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2b/e6/f7f8612b1254b4eff498ce548e76b927048ed8b75c1adf5565c6e6053de7/ftl_reasons-0.3.0.tar.gz", hash = "sha256:e17421a291cde9190f5034a3ef93867e89c7f5e9acb7ae90b5c57191762b4fc5", size = 39532, upload-time = "2026-03-23T07:54:00.778Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/d8/a8431efabfcad30e42994cb191d819f49497d52b56de62b551e8e9036105/ftl_reasons-0.3.0-py3-none-any.whl", hash = "sha256:65523a778aa2f039b694d4d04916233341d66ce621839be682f30097579da165", size = 30119, upload-time = "2026-03-23T07:54:01.658Z" },
-]
+version = "0.20.0"
+source = { git = "https://github.com/benthomasson/ftl-reasons.git?rev=main#6583ce36654b2f9b1f942ae829e05955edc03e51" }
 
 [[package]]
 name = "google-api-core"
