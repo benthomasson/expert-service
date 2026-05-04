@@ -207,12 +207,19 @@ TMS_ASK_PROMPT = """\
 You are answering a question using a belief network (a Truth Maintenance System).
 Each belief has an ID, text, and truth value (IN = held true, OUT = retracted).
 
+You have one tool available:
+
+{{"tool": "search_beliefs", "query": "search terms"}}
+
 Rules:
+- If the belief matches below are sufficient to answer the question, write your
+  answer directly. Do NOT call the tool.
+- If you need to search for more beliefs, respond with ONLY a single JSON line
+  (no other text). The system will run the search and give you the results.
 - Cite belief IDs in [brackets] when referencing specific beliefs.
 - ONLY answer based on the beliefs provided. Do NOT use your training data or
   general knowledge to fill gaps.
 - If the beliefs are insufficient to answer, say so honestly and note what's missing.
-- Be specific and concise.
 
 ## Question
 
@@ -221,7 +228,29 @@ Rules:
 ## Belief matches
 
 {beliefs}
-"""
+{tool_history}"""
+
+TMS_FINAL_PROMPT = """\
+You are answering a question using a belief network (a Truth Maintenance System).
+Each belief has an ID, text, and truth value (IN = held true, OUT = retracted).
+
+Rules:
+- Cite belief IDs in [brackets] when referencing specific beliefs.
+- ONLY answer based on the beliefs provided. Do NOT use your training data or
+  general knowledge to fill gaps.
+- If the beliefs are insufficient to answer, say so honestly and note what's missing.
+- Write your answer now.
+
+## Question
+
+{question}
+
+## Belief matches
+
+{beliefs}
+{tool_history}"""
+
+MAX_TMS_ITERATIONS = 3
 
 FTS_RAG_PROMPT = """\
 You are answering questions using retrieved document excerpts.
@@ -277,12 +306,77 @@ Produce a single merged answer that:
 """
 
 
+def _extract_tool_call(text: str) -> dict | None:
+    """Extract a tool call from LLM response text. Returns parsed dict or None."""
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+            if "tool" in obj:
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+async def _tms_answer_iterative(
+    project_id: UUID, llm, question: str, initial_beliefs: str,
+) -> str:
+    """TMS answer with up to 3 iterative search rounds, matching CLI behavior."""
+    beliefs_ctx = initial_beliefs
+    if not beliefs_ctx:
+        return "No matching beliefs found in the network."
+
+    tool_history: list[dict] = []
+
+    for iteration in range(MAX_TMS_ITERATIONS):
+        history_section = ""
+        if tool_history:
+            parts = [
+                f"### Tool call: search_beliefs(\"{e['query']}\")\n\n{e['result']}"
+                for e in tool_history
+            ]
+            history_section = "\n\n## Additional search results\n\n" + "\n\n---\n\n".join(parts)
+
+        if iteration == MAX_TMS_ITERATIONS - 1:
+            prompt = TMS_FINAL_PROMPT.format(
+                question=question, beliefs=beliefs_ctx, tool_history=history_section,
+            )
+        else:
+            prompt = TMS_ASK_PROMPT.format(
+                question=question, beliefs=beliefs_ctx, tool_history=history_section,
+            )
+
+        resp = await llm.ainvoke(prompt)
+        response_text = _extract_text(resp.content)
+
+        tool_call = _extract_tool_call(response_text)
+        if tool_call is None:
+            return response_text
+
+        if tool_call.get("tool") == "search_beliefs":
+            query = tool_call.get("query", "")
+            logger.info("TMS iterative search round %d: %r", iteration + 1, query)
+            result = await asyncio.to_thread(
+                _quick_belief_search, project_id, query, 20,
+            )
+            tool_history.append({"query": query, "result": result or "No results found."})
+            if result:
+                beliefs_ctx = result
+        else:
+            return response_text
+
+    return response_text
+
+
 async def dual_ask(
     project_id: UUID,
     model: str,
     message: str,
 ) -> dict:
-    """Dual-path: TMS + FTS RAG in parallel, merge, return complete answer as dict."""
+    """Dual-path: TMS (iterative) + FTS RAG in parallel, merge, return complete answer."""
     # Phase 1: parallel retrieval
     belief_ctx, chunk_ctx = await asyncio.gather(
         asyncio.to_thread(_quick_belief_search, project_id, message, 20),
@@ -296,15 +390,8 @@ async def dual_ask(
             "rag_chars": 0,
         }
 
-    # Phase 2: parallel synthesis
+    # Phase 2: parallel synthesis (TMS iterative + RAG single-pass)
     llm = get_chat_model(model)
-
-    async def _tms_answer() -> str:
-        if not belief_ctx:
-            return "No matching beliefs found in the network."
-        prompt = TMS_ASK_PROMPT.format(beliefs=belief_ctx, question=message)
-        resp = await llm.ainvoke(prompt)
-        return _extract_text(resp.content)
 
     async def _rag_answer() -> str:
         if not chunk_ctx:
@@ -313,7 +400,10 @@ async def dual_ask(
         resp = await llm.ainvoke(prompt)
         return _extract_text(resp.content)
 
-    answer_tms, answer_fts = await asyncio.gather(_tms_answer(), _rag_answer())
+    answer_tms, answer_fts = await asyncio.gather(
+        _tms_answer_iterative(project_id, llm, message, belief_ctx),
+        _rag_answer(),
+    )
 
     # Phase 3: merge
     merge_prompt = MERGE_PROMPT.format(
@@ -362,13 +452,6 @@ async def dual_chat_stream(
 
     llm = get_chat_model(model)
 
-    async def _tms_answer() -> str:
-        if not belief_ctx:
-            return "No matching beliefs found in the network."
-        prompt = TMS_ASK_PROMPT.format(beliefs=belief_ctx, question=message)
-        resp = await llm.ainvoke(prompt)
-        return _extract_text(resp.content)
-
     async def _rag_answer() -> str:
         if not chunk_ctx:
             return "No relevant source documents found."
@@ -376,7 +459,10 @@ async def dual_chat_stream(
         resp = await llm.ainvoke(prompt)
         return _extract_text(resp.content)
 
-    answer_tms, answer_fts = await asyncio.gather(_tms_answer(), _rag_answer())
+    answer_tms, answer_fts = await asyncio.gather(
+        _tms_answer_iterative(project_id, llm, message, belief_ctx),
+        _rag_answer(),
+    )
 
     logger.info(
         "Dual-path: TMS=%d chars, RAG=%d chars for %r",
