@@ -5,10 +5,26 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select, text as sa_text
 
 from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream
+from expert_service.db.connection import get_sync_session
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
+
+
+def _get_project_connectors(project_id: UUID) -> list[str] | None:
+    """Read the project's connector whitelist from config JSONB."""
+    with get_sync_session() as session:
+        row = session.execute(
+            sa_text("SELECT config FROM projects WHERE id = :pid"),
+            {"pid": str(project_id)},
+        ).first()
+    if row and row.config and isinstance(row.config, dict):
+        connectors = row.config.get("connectors")
+        if isinstance(connectors, list) and connectors:
+            return connectors
+    return None
 
 
 class ChatRequest(BaseModel):
@@ -21,9 +37,11 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def chat(project_id: UUID, data: ChatRequest):
     thread_id = data.thread_id or str(uuid4())
+    allowed = _get_project_connectors(project_id)
 
     if data.dual:
-        stream = dual_chat_stream(project_id, data.model, data.message, thread_id)
+        stream = dual_chat_stream(project_id, data.model, data.message, thread_id,
+                                  allowed_connectors=allowed)
     else:
         stream = chat_stream(project_id, data.model, data.message, thread_id)
 
@@ -46,4 +64,6 @@ class AskRequest(BaseModel):
 @router.post("/ask")
 async def ask(project_id: UUID, data: AskRequest):
     """Non-streaming dual-path answer. Returns complete JSON — designed for evals."""
-    return await dual_ask(project_id, data.model, data.question)
+    allowed = _get_project_connectors(project_id)
+    return await dual_ask(project_id, data.model, data.question,
+                          allowed_connectors=allowed)

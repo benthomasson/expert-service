@@ -12,6 +12,7 @@ from sqlalchemy import text as sa_text
 
 from expert_service.chat.agent import get_agent
 from expert_service.config import settings
+from expert_service.connectors import ConnectorRegistry, query_data
 from expert_service.db.connection import get_sync_session
 from expert_service.llm.provider import get_chat_model
 
@@ -264,17 +265,31 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _connector_tool_section(allowed_connectors: list[str] | None = None) -> str:
+    """Build the query_data tool description if connectors are available."""
+    connectors = ConnectorRegistry.get().list_connectors(allowed_connectors)
+    if not connectors:
+        return ""
+    names = ", ".join(c.name for c in connectors)
+    descriptions = "\n".join(f"- {c.name}: {c.description}" for c in connectors)
+    return (
+        f'\n{{"tool": "query_data", "question": "natural language question", "connector": "{connectors[0].name}"}}\n'
+        f"\nAvailable data connectors:\n{descriptions}\n"
+        f"\n- Only query live data when beliefs are insufficient (e.g. current numbers, temporal data).\n"
+    )
+
+
 TMS_ASK_PROMPT = """\
 You are answering a question using a belief network (a Truth Maintenance System).
 Each belief has an ID, text, and truth value (IN = held true, OUT = retracted).
 
-You have one tool available:
+You have tools available:
 
 {{"tool": "search_beliefs", "query": "search terms"}}
-
+{connector_tools}
 Rules:
 - If the belief matches below are sufficient to answer the question, write your
-  answer directly. Do NOT call the tool.
+  answer directly. Do NOT call a tool.
 - If you need to search for more beliefs, respond with ONLY a single JSON line
   (no other text). The system will run the search and give you the results.
 - Cite belief IDs in [brackets] when referencing specific beliefs.
@@ -384,19 +399,25 @@ def _extract_tool_call(text: str) -> dict | None:
 
 async def _tms_answer_iterative(
     project_id: UUID, llm, question: str, initial_beliefs: str,
+    allowed_connectors: list[str] | None = None,
 ) -> str:
-    """TMS answer with up to 3 iterative search rounds, matching CLI behavior."""
+    """TMS answer with up to 3 iterative search rounds, matching CLI behavior.
+
+    When data connectors are available (via allowed_connectors), the LLM can
+    also call query_data to fetch live data alongside belief searches.
+    """
     beliefs_ctx = initial_beliefs
     if not beliefs_ctx:
         return "No matching beliefs found in the network."
 
+    connector_tools = _connector_tool_section(allowed_connectors)
     tool_history: list[dict] = []
 
     for iteration in range(MAX_TMS_ITERATIONS):
         history_section = ""
         if tool_history:
             parts = [
-                f"### Tool call: search_beliefs(\"{e['query']}\")\n\n{e['result']}"
+                f"### Tool call: {e['tool']}(\"{e['query']}\")\n\n{e['result']}"
                 for e in tool_history
             ]
             history_section = "\n\n## Additional search results\n\n" + "\n\n---\n\n".join(parts)
@@ -407,7 +428,8 @@ async def _tms_answer_iterative(
             )
         else:
             prompt = TMS_ASK_PROMPT.format(
-                question=question, beliefs=beliefs_ctx, tool_history=history_section,
+                question=question, beliefs=beliefs_ctx,
+                tool_history=history_section, connector_tools=connector_tools,
             )
 
         resp = await llm.ainvoke(prompt)
@@ -423,9 +445,19 @@ async def _tms_answer_iterative(
             result = await asyncio.to_thread(
                 _quick_belief_search, project_id, query, 20,
             )
-            tool_history.append({"query": query, "result": result or "No results found."})
+            tool_history.append({"tool": "search_beliefs", "query": query,
+                                 "result": result or "No results found."})
             if result:
                 beliefs_ctx = result
+        elif tool_call.get("tool") == "query_data":
+            q = tool_call.get("question", "")
+            connector = tool_call.get("connector")
+            logger.info("TMS data query round %d: connector=%s query=%r",
+                        iteration + 1, connector, q)
+            result = await query_data(q, connector_name=connector,
+                                      allowed=allowed_connectors)
+            tool_history.append({"tool": f"query_data({connector or 'all'})",
+                                 "query": q, "result": result})
         else:
             return response_text
 
@@ -436,6 +468,7 @@ async def dual_ask(
     project_id: UUID,
     model: str,
     message: str,
+    allowed_connectors: list[str] | None = None,
 ) -> dict:
     """Dual-path: TMS (iterative) + FTS RAG in parallel, merge, return complete answer."""
     # Phase 1: parallel retrieval
@@ -462,7 +495,8 @@ async def dual_ask(
         return _extract_text(resp.content)
 
     answer_tms, answer_fts = await asyncio.gather(
-        _tms_answer_iterative(project_id, llm, message, belief_ctx),
+        _tms_answer_iterative(project_id, llm, message, belief_ctx,
+                              allowed_connectors=allowed_connectors),
         _rag_answer(),
     )
 
@@ -485,6 +519,7 @@ async def dual_chat_stream(
     model: str,
     message: str,
     thread_id: str,
+    allowed_connectors: list[str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Dual-path: TMS beliefs + FTS RAG in parallel, then merge with streaming.
 
@@ -521,7 +556,8 @@ async def dual_chat_stream(
         return _extract_text(resp.content)
 
     answer_tms, answer_fts = await asyncio.gather(
-        _tms_answer_iterative(project_id, llm, message, belief_ctx),
+        _tms_answer_iterative(project_id, llm, message, belief_ctx,
+                              allowed_connectors=allowed_connectors),
         _rag_answer(),
     )
 
