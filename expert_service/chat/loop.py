@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 import re
 from collections.abc import AsyncGenerator
 from uuid import UUID
@@ -31,38 +32,87 @@ _STOP_WORDS = frozenset({
 })
 
 
+def _get_query_terms(question: str) -> list[str]:
+    """Extract meaningful query terms (lowercased) from a question."""
+    words = re.findall(r'\w+', question)
+    terms = [w.lower() for w in words if w.lower() not in _STOP_WORDS and len(w) > 1]
+    if not terms:
+        terms = [w.lower() for w in re.findall(r'\w+', question) if len(w) > 1]
+    return terms
+
+
 def _build_or_tsquery(question: str) -> str:
     """Build an OR-based tsquery string from a question, matching FTS5 behavior."""
-    words = re.findall(r'\w+', question)
-    words = [w for w in words if w.lower() not in _STOP_WORDS and len(w) > 1]
-    if not words:
-        words = [w for w in re.findall(r'\w+', question) if len(w) > 1]
-    if not words:
+    terms = _get_query_terms(question)
+    if not terms:
         return ""
-    return " | ".join(w for w in words)
+    return " | ".join(terms)
+
+
+def _compute_idf(session, project_id: str, terms: list[str],
+                 table: str, text_col: str = "text") -> dict[str, float]:
+    """Compute IDF weight for each query term against a table's tsvector index.
+
+    IDF = log((N + 1) / (df + 1)) where N = total docs, df = docs containing term.
+    Rare terms get high weight, common terms get low weight — approximates BM25.
+    """
+    total = session.execute(
+        sa_text(f"SELECT count(*) FROM {table} WHERE project_id = :pid"),
+        {"pid": project_id},
+    ).scalar() or 0
+    if total == 0:
+        return {}
+    idfs = {}
+    for term in terms:
+        df = session.execute(
+            sa_text(
+                f"SELECT count(*) FROM {table} "
+                f"WHERE project_id = :pid "
+                f"AND to_tsvector('english', {text_col}) @@ to_tsquery('english', :term)"
+            ),
+            {"pid": project_id, "term": term},
+        ).scalar() or 0
+        idfs[term] = math.log((total + 1) / (df + 1))
+    return idfs
+
+
+def _idf_score(text: str, term_idfs: dict[str, float]) -> float:
+    """Score text by sum of IDF weights for matched terms."""
+    text_lower = text.lower()
+    return sum(idf for term, idf in term_idfs.items() if term in text_lower)
 
 
 def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> str:
-    """Fast belief pre-check via PostgreSQL tsvector (OR matching). Returns compact format."""
+    """Fast belief pre-check via PostgreSQL tsvector with IDF re-ranking.
+
+    Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
+    IDF-weighted term matching so rare/diagnostic terms surface over common ones.
+    """
     or_query = _build_or_tsquery(question)
     if not or_query:
         return ""
+    terms = _get_query_terms(question)
+    pid = str(project_id)
     with get_sync_session() as session:
+        idfs = _compute_idf(session, pid, terms, "rms_nodes")
         rows = session.execute(
             sa_text(
                 "SELECT id, text, truth_value "
                 "FROM rms_nodes "
                 "WHERE project_id = :pid "
                 "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
-                "ORDER BY ts_rank(to_tsvector('english', text), "
+                "ORDER BY ts_rank_cd(to_tsvector('english', text), "
                 "         to_tsquery('english', :q)) DESC "
                 "LIMIT :lim"
             ),
-            {"pid": str(project_id), "q": or_query, "lim": limit},
+            {"pid": pid, "q": or_query, "lim": limit * 3},
         ).all()
 
     if not rows:
         return ""
+    if idfs:
+        rows = sorted(rows, key=lambda r: _idf_score(r.text, idfs), reverse=True)
+    rows = rows[:limit]
     return "\n".join(
         f"[{r.truth_value}] {r.id} — {r.text}" for r in rows
     )
@@ -166,11 +216,19 @@ MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
 
 
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
-    """FTS search over source_chunks (OR matching). Returns formatted top-N chunks within token budget."""
+    """FTS search over source_chunks with IDF re-ranking.
+
+    Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
+    IDF-weighted term matching so rare/diagnostic terms (e.g. "Renewals")
+    surface over common ones (e.g. "data", "strategy"). Approximates BM25.
+    """
     or_query = _build_or_tsquery(query)
     if not or_query:
         return ""
+    terms = _get_query_terms(query)
+    pid = str(project_id)
     with get_sync_session() as session:
+        idfs = _compute_idf(session, pid, terms, "source_chunks")
         rows = session.execute(
             sa_text(
                 "SELECT c.text, c.section, s.slug "
@@ -178,14 +236,17 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
                 "JOIN sources s ON s.id = c.source_id "
                 "WHERE c.project_id = :pid "
                 "AND to_tsvector('english', c.text) @@ to_tsquery('english', :q) "
-                "ORDER BY ts_rank(to_tsvector('english', c.text), "
+                "ORDER BY ts_rank_cd(to_tsvector('english', c.text), "
                 "         to_tsquery('english', :q)) DESC "
                 "LIMIT :lim"
             ),
-            {"pid": str(project_id), "q": or_query, "lim": limit},
+            {"pid": pid, "q": or_query, "lim": limit * 3},
         ).all()
     if not rows:
         return ""
+    if idfs:
+        rows = sorted(rows, key=lambda r: _idf_score(r.text, idfs), reverse=True)
+    rows = rows[:limit]
     parts = []
     total = 0
     for i, r in enumerate(rows, 1):
