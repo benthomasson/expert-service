@@ -132,8 +132,12 @@ async def chat_stream(
 
 # --- Dual-path architecture ---
 
+MAX_CHUNK_CHARS = 2000  # Truncate individual chunks
+MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
+
+
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
-    """FTS search over source_chunks. Returns formatted top-N chunks."""
+    """FTS search over source_chunks. Returns formatted top-N chunks within token budget."""
     with get_sync_session() as session:
         rows = session.execute(
             sa_text(
@@ -151,11 +155,19 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
     if not rows:
         return ""
     parts = []
+    total = 0
     for i, r in enumerate(rows, 1):
+        chunk_text = r.text[:MAX_CHUNK_CHARS]
+        if len(r.text) > MAX_CHUNK_CHARS:
+            chunk_text += "\n[...truncated]"
         header = f"[{i}] {r.slug}"
         if r.section:
             header += f" > {r.section}"
-        parts.append(f"### {header}\n\n{r.text}")
+        part = f"### {header}\n\n{chunk_text}"
+        if total + len(part) > MAX_CONTEXT_CHARS:
+            break
+        parts.append(part)
+        total += len(part)
     return "\n\n---\n\n".join(parts)
 
 
