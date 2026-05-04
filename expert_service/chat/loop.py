@@ -245,6 +245,58 @@ Produce a single merged answer that:
 """
 
 
+async def dual_ask(
+    project_id: UUID,
+    model: str,
+    message: str,
+) -> dict:
+    """Dual-path: TMS + FTS RAG in parallel, merge, return complete answer as dict."""
+    # Phase 1: parallel retrieval
+    belief_ctx, chunk_ctx = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project_id, message, 20),
+        asyncio.to_thread(_search_source_chunks, project_id, message, 10),
+    )
+
+    if not belief_ctx and not chunk_ctx:
+        return {
+            "answer": "No matching beliefs or source documents found for this question.",
+            "tms_chars": 0,
+            "rag_chars": 0,
+        }
+
+    # Phase 2: parallel synthesis
+    llm = get_chat_model(model)
+
+    async def _tms_answer() -> str:
+        if not belief_ctx:
+            return "No matching beliefs found in the network."
+        prompt = TMS_ASK_PROMPT.format(beliefs=belief_ctx, question=message)
+        resp = await llm.ainvoke(prompt)
+        return _extract_text(resp.content)
+
+    async def _rag_answer() -> str:
+        if not chunk_ctx:
+            return "No relevant source documents found."
+        prompt = FTS_RAG_PROMPT.format(context=chunk_ctx, question=message)
+        resp = await llm.ainvoke(prompt)
+        return _extract_text(resp.content)
+
+    answer_tms, answer_fts = await asyncio.gather(_tms_answer(), _rag_answer())
+
+    # Phase 3: merge
+    merge_prompt = MERGE_PROMPT.format(
+        question=message, answer_tms=answer_tms, answer_fts=answer_fts,
+    )
+    resp = await llm.ainvoke(merge_prompt)
+    merged = _extract_text(resp.content)
+
+    return {
+        "answer": merged,
+        "tms_chars": len(answer_tms),
+        "rag_chars": len(answer_fts),
+    }
+
+
 async def dual_chat_stream(
     project_id: UUID,
     model: str,

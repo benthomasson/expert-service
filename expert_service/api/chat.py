@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from expert_service.chat.loop import chat_stream, dual_chat_stream
+from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
 
@@ -36,3 +36,14 @@ async def chat(project_id: UUID, data: ChatRequest):
             "X-Thread-Id": thread_id,
         },
     )
+
+
+class AskRequest(BaseModel):
+    question: str
+    model: str = "claude-sonnet-4-6"
+
+
+@router.post("/ask")
+async def ask(project_id: UUID, data: AskRequest):
+    """Non-streaming dual-path answer. Returns complete JSON — designed for evals."""
+    return await dual_ask(project_id, data.model, data.question)
