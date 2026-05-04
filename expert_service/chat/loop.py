@@ -1,5 +1,6 @@
 """LangGraph agent streaming with SSE translation."""
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -10,6 +11,7 @@ from sqlalchemy import text as sa_text
 from expert_service.chat.agent import get_agent
 from expert_service.config import settings
 from expert_service.db.connection import get_sync_session
+from expert_service.llm.provider import get_chat_model
 
 logger = logging.getLogger(__name__)
 
@@ -124,5 +126,176 @@ async def chat_stream(
                         f"event: tool_result\n"
                         f"data: {json.dumps({'name': name, 'summary': summary})}\n\n"
                     )
+
+    yield "event: done\ndata: {}\n\n"
+
+
+# --- Dual-path architecture ---
+
+def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
+    """FTS search over source_chunks. Returns formatted top-N chunks."""
+    with get_sync_session() as session:
+        rows = session.execute(
+            sa_text(
+                "SELECT c.text, c.section, s.slug "
+                "FROM source_chunks c "
+                "JOIN sources s ON s.id = c.source_id "
+                "WHERE c.project_id = :pid "
+                "AND to_tsvector('english', c.text) @@ plainto_tsquery('english', :q) "
+                "ORDER BY ts_rank(to_tsvector('english', c.text), "
+                "         plainto_tsquery('english', :q)) DESC "
+                "LIMIT :lim"
+            ),
+            {"pid": str(project_id), "q": query, "lim": limit},
+        ).all()
+    if not rows:
+        return ""
+    parts = []
+    for i, r in enumerate(rows, 1):
+        header = f"[{i}] {r.slug}"
+        if r.section:
+            header += f" > {r.section}"
+        parts.append(f"### {header}\n\n{r.text}")
+    return "\n\n---\n\n".join(parts)
+
+
+TMS_ASK_PROMPT = """\
+You are answering a question using a belief network (a Truth Maintenance System).
+Each belief has an ID, text, and truth value (IN = held true, OUT = retracted).
+
+Rules:
+- Cite belief IDs in [brackets] when referencing specific beliefs.
+- ONLY answer based on the beliefs provided. Do NOT use your training data or
+  general knowledge to fill gaps.
+- If the beliefs are insufficient to answer, say so honestly and note what's missing.
+- Be specific and concise.
+
+## Question
+
+{question}
+
+## Belief matches
+
+{beliefs}
+"""
+
+FTS_RAG_PROMPT = """\
+You are answering questions using retrieved document excerpts.
+
+Below are the most relevant excerpts from source documents, retrieved via
+full-text search. Use them to answer the question. Cite your sources by referencing
+the document filename in [brackets].
+
+If the excerpts don't contain enough information to answer the question, say so honestly.
+Do not fabricate information that isn't in the provided excerpts.
+
+## Retrieved Documents
+
+{context}
+
+## Question
+
+{question}
+
+## Instructions
+
+- Answer the question based on the retrieved documents above
+- Cite sources using [filename] notation
+- If information is insufficient, say what you can and note the gaps
+- Be specific and concise
+"""
+
+MERGE_PROMPT = """\
+You are merging two answers to the same question. Each answer was produced
+independently using a different retrieval method:
+
+- Answer A used a structured belief network with dependency chains
+- Answer B used full-text search over source documents
+
+Produce a single merged answer that:
+- Combines information from both answers
+- When both answers cover the same point, use the more specific/detailed version
+- Preserve all citations (belief IDs in [brackets] from Answer A, [filenames] from Answer B)
+- Do not add information that neither answer contains
+- If the answers contradict each other, note the disagreement
+
+## Question
+
+{question}
+
+## Answer A (Belief Network)
+
+{answer_tms}
+
+## Answer B (Source Documents)
+
+{answer_fts}
+"""
+
+
+async def dual_chat_stream(
+    project_id: UUID,
+    model: str,
+    message: str,
+    thread_id: str,
+) -> AsyncGenerator[str, None]:
+    """Dual-path: TMS beliefs + FTS RAG in parallel, then merge with streaming.
+
+    Three phases:
+    1. Parallel retrieval: tsvector search over beliefs and source chunks
+    2. Parallel synthesis: TMS answer + FTS RAG answer (two LLM calls)
+    3. Merge: combine both answers in a third LLM call, streaming tokens
+    """
+    yield f"event: phase\ndata: {json.dumps({'phase': 'searching'})}\n\n"
+
+    # Phase 1: parallel retrieval (sync → run in threads)
+    belief_ctx, chunk_ctx = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project_id, message, 20),
+        asyncio.to_thread(_search_source_chunks, project_id, message, 10),
+    )
+
+    if not belief_ctx and not chunk_ctx:
+        yield (
+            f"data: {json.dumps({'type': 'token', 'content': 'No matching beliefs or source documents found for this question.'})}\n\n"
+        )
+        yield "event: done\ndata: {}\n\n"
+        return
+
+    # Phase 2: parallel synthesis
+    yield f"event: phase\ndata: {json.dumps({'phase': 'synthesizing'})}\n\n"
+
+    llm = get_chat_model(model)
+
+    async def _tms_answer() -> str:
+        if not belief_ctx:
+            return "No matching beliefs found in the network."
+        prompt = TMS_ASK_PROMPT.format(beliefs=belief_ctx, question=message)
+        resp = await llm.ainvoke(prompt)
+        return _extract_text(resp.content)
+
+    async def _rag_answer() -> str:
+        if not chunk_ctx:
+            return "No relevant source documents found."
+        prompt = FTS_RAG_PROMPT.format(context=chunk_ctx, question=message)
+        resp = await llm.ainvoke(prompt)
+        return _extract_text(resp.content)
+
+    answer_tms, answer_fts = await asyncio.gather(_tms_answer(), _rag_answer())
+
+    logger.info(
+        "Dual-path: TMS=%d chars, RAG=%d chars for %r",
+        len(answer_tms), len(answer_fts), message[:60],
+    )
+
+    # Phase 3: merge — stream tokens
+    yield f"event: phase\ndata: {json.dumps({'phase': 'merging'})}\n\n"
+
+    merge_prompt = MERGE_PROMPT.format(
+        question=message, answer_tms=answer_tms, answer_fts=answer_fts,
+    )
+    async for chunk in llm.astream(merge_prompt):
+        text = _extract_text(chunk.content) if chunk.content else ""
+        if text:
+            yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
 
     yield "event: done\ndata: {}\n\n"

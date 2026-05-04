@@ -149,12 +149,27 @@ CREATE TABLE IF NOT EXISTS rms_network_meta (
     PRIMARY KEY (key, project_id)
 );
 
+-- Source document chunks for FTS RAG
+CREATE TABLE IF NOT EXISTS source_chunks (
+    id SERIAL PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_id UUID NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    chunk_index INT NOT NULL,
+    section TEXT DEFAULT '',
+    text TEXT NOT NULL,
+    UNIQUE(source_id, chunk_index)
+);
+
 -- Full-text search indexes
 CREATE INDEX IF NOT EXISTS idx_entries_fts ON entries
     USING gin(to_tsvector('english', coalesce(title, '') || ' ' || content));
 CREATE INDEX IF NOT EXISTS idx_claims_fts ON claims
     USING gin(to_tsvector('english', text));
 CREATE INDEX IF NOT EXISTS idx_rms_nodes_fts ON rms_nodes
+    USING gin(to_tsvector('english', text));
+
+CREATE INDEX IF NOT EXISTS idx_source_chunks_project ON source_chunks(project_id);
+CREATE INDEX IF NOT EXISTS idx_source_chunks_fts ON source_chunks
     USING gin(to_tsvector('english', text));
 
 -- Common query indexes

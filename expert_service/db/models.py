@@ -149,6 +149,18 @@ class PipelineRun(Base):
     project = relationship("Project", back_populates="pipeline_runs")
 
 
+class SourceChunk(Base):
+    __tablename__ = "source_chunks"
+    __table_args__ = (UniqueConstraint("source_id", "chunk_index"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    section = Column(String, default="")
+    text = Column(Text, nullable=False)
+
+
 class Embedding(Base):
     __tablename__ = "embeddings"
 

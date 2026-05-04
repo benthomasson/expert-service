@@ -9,6 +9,7 @@ from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from expert_service.chunking import chunk_markdown
 from expert_service.db.connection import get_session
 from expert_service.db.models import Entry, Source, entry_sources
 from expert_service.rms import api as rms_api
@@ -264,6 +265,23 @@ async def import_sources(
             word_count=s.word_count,
         )
         session.add(source)
+        await session.flush()  # get source.id for chunks
+
+        # Auto-chunk the source content
+        for c in chunk_markdown(s.content):
+            await session.execute(
+                text(
+                    "INSERT INTO source_chunks (project_id, source_id, chunk_index, section, text) "
+                    "VALUES (:pid, :sid, :idx, :sec, :txt)"
+                ),
+                {
+                    "pid": str(project_id),
+                    "sid": str(source.id),
+                    "idx": c["chunk_index"],
+                    "sec": c["section"],
+                    "txt": c["text"],
+                },
+            )
         imported += 1
 
     await session.commit()
@@ -431,3 +449,43 @@ async def link_entries_sources(
 
     await session.commit()
     return {"linked": linked, "migrated": migrated, "already_linked": already_linked}
+
+
+@router.post("/chunk-sources")
+async def chunk_sources(
+    project_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Backfill source_chunks for all sources that haven't been chunked yet."""
+    sources = await session.execute(
+        select(Source).where(Source.project_id == project_id)
+    )
+    chunked = 0
+    total_chunks = 0
+    for source in sources.scalars().all():
+        # Skip if already chunked
+        existing = await session.execute(
+            text("SELECT 1 FROM source_chunks WHERE source_id = :sid LIMIT 1"),
+            {"sid": str(source.id)},
+        )
+        if existing.scalar_one_or_none():
+            continue
+        chunks = chunk_markdown(source.content)
+        for c in chunks:
+            await session.execute(
+                text(
+                    "INSERT INTO source_chunks (project_id, source_id, chunk_index, section, text) "
+                    "VALUES (:pid, :sid, :idx, :sec, :txt)"
+                ),
+                {
+                    "pid": str(project_id),
+                    "sid": str(source.id),
+                    "idx": c["chunk_index"],
+                    "sec": c["section"],
+                    "txt": c["text"],
+                },
+            )
+        chunked += 1
+        total_chunks += len(chunks)
+    await session.commit()
+    return {"sources_chunked": chunked, "total_chunks": total_chunks}
