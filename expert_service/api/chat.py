@@ -13,9 +13,9 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = "gemini-2.5-pro"
+    model: str = "claude-sonnet-4-6"
     thread_id: str | None = None
-    dual: bool = False
+    dual: bool = True
 
 
 @router.post("/chat")
