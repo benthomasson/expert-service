@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
@@ -15,21 +16,49 @@ from expert_service.llm.provider import get_chat_model
 
 logger = logging.getLogger(__name__)
 
+# Common stop words to exclude from OR queries (matches reasons_lib)
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "must", "ought",
+    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+    "they", "them", "their", "this", "that", "these", "those", "what",
+    "which", "who", "whom", "how", "when", "where", "why", "if", "then",
+    "than", "so", "no", "not", "only", "very", "too", "also", "just",
+    "about", "above", "after", "before", "between", "but", "by", "for",
+    "from", "in", "into", "of", "on", "or", "out", "over", "to", "up",
+    "with", "and", "as", "at",
+})
+
+
+def _build_or_tsquery(question: str) -> str:
+    """Build an OR-based tsquery string from a question, matching FTS5 behavior."""
+    words = re.findall(r'\w+', question)
+    words = [w for w in words if w.lower() not in _STOP_WORDS and len(w) > 1]
+    if not words:
+        words = [w for w in re.findall(r'\w+', question) if len(w) > 1]
+    if not words:
+        return ""
+    return " | ".join(w for w in words)
+
 
 def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> str:
-    """Fast belief pre-check via PostgreSQL tsvector. Returns compact format."""
+    """Fast belief pre-check via PostgreSQL tsvector (OR matching). Returns compact format."""
+    or_query = _build_or_tsquery(question)
+    if not or_query:
+        return ""
     with get_sync_session() as session:
         rows = session.execute(
             sa_text(
                 "SELECT id, text, truth_value "
                 "FROM rms_nodes "
                 "WHERE project_id = :pid "
-                "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
+                "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
                 "ORDER BY ts_rank(to_tsvector('english', text), "
-                "         plainto_tsquery('english', :q)) DESC "
+                "         to_tsquery('english', :q)) DESC "
                 "LIMIT :lim"
             ),
-            {"pid": str(project_id), "q": question, "lim": limit},
+            {"pid": str(project_id), "q": or_query, "lim": limit},
         ).all()
 
     if not rows:
@@ -137,7 +166,10 @@ MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
 
 
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
-    """FTS search over source_chunks. Returns formatted top-N chunks within token budget."""
+    """FTS search over source_chunks (OR matching). Returns formatted top-N chunks within token budget."""
+    or_query = _build_or_tsquery(query)
+    if not or_query:
+        return ""
     with get_sync_session() as session:
         rows = session.execute(
             sa_text(
@@ -145,12 +177,12 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
                 "FROM source_chunks c "
                 "JOIN sources s ON s.id = c.source_id "
                 "WHERE c.project_id = :pid "
-                "AND to_tsvector('english', c.text) @@ plainto_tsquery('english', :q) "
+                "AND to_tsvector('english', c.text) @@ to_tsquery('english', :q) "
                 "ORDER BY ts_rank(to_tsvector('english', c.text), "
-                "         plainto_tsquery('english', :q)) DESC "
+                "         to_tsquery('english', :q)) DESC "
                 "LIMIT :lim"
             ),
-            {"pid": str(project_id), "q": query, "lim": limit},
+            {"pid": str(project_id), "q": or_query, "lim": limit},
         ).all()
     if not rows:
         return ""
