@@ -91,6 +91,7 @@ class SourceRef:
     slug: str        # Raw identifier for deduplication
     url: str         # URL if available
     category: str    # "Primary", "Supporting", "Data"
+    cite_key: str = ""  # Key the LLM uses to cite this source (belief ID or chunk slug)
 
 
 def _source_title_from_path(path: str) -> str:
@@ -107,10 +108,50 @@ def _source_title_from_path(path: str) -> str:
 MAX_SOURCES = 10  # Cap displayed sources to keep responses readable
 
 
-def _build_sources_section(sources: list[SourceRef]) -> str:
-    """Build a ## Sources section from collected source refs."""
+def _extract_cited_keys(text: str) -> set[str]:
+    """Extract [citation] keys from LLM response text.
+
+    Matches belief IDs like [engineering:belief-name] and
+    chunk slugs like [engineering/source-name].
+    Skips markdown links [text](url) and numeric-only refs [1].
+    """
+    keys = set()
+    for m in re.finditer(r'\[([^\]]+)\]', text):
+        key = m.group(1)
+        # Skip markdown links (followed by parenthesized URL)
+        end = m.end()
+        if end < len(text) and text[end] == '(':
+            continue
+        # Skip pure numbers, truth values, and common markdown patterns
+        if re.match(r'^(\d+|IN|OUT|\.\.\.truncated)$', key):
+            continue
+        keys.add(key)
+    return keys
+
+
+def _build_sources_section(sources: list[SourceRef], response_text: str = "") -> str:
+    """Build a ## Sources section from collected source refs.
+
+    If response_text is provided, only includes sources that the LLM
+    actually cited inline via [belief-id] or [slug] markers. Data sources
+    are always included.
+    """
     if not sources:
         return ""
+
+    # Filter to cited sources if we have response text
+    if response_text:
+        cited_keys = _extract_cited_keys(response_text)
+        filtered = []
+        for s in sources:
+            if s.category == "Data":
+                filtered.append(s)
+            elif s.cite_key and s.cite_key in cited_keys:
+                filtered.append(s)
+        # Fall back to all sources if nothing was cited (LLM didn't use inline citations)
+        if filtered:
+            sources = filtered
+
     # Deduplicate by slug, preserving order
     seen: set[str] = set()
     unique: list[SourceRef] = []
@@ -129,11 +170,10 @@ def _build_sources_section(sources: list[SourceRef]) -> str:
 
     lines = ["", "", "## Sources", ""]
     for i, s in enumerate(unique, 1):
+        lines.append(f"[{i}] ({s.category}) {s.label}")
         if s.url:
-            lines.append(f"[{i}] ({s.category}) {s.label}")
             lines.append(f"[Source]({s.url})")
         else:
-            lines.append(f"[{i}] ({s.category}) {s.label}")
             lines.append(f"[Source: {s.slug}]")
         lines.append("")
     return "\n".join(lines)
@@ -156,7 +196,7 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
         idfs = _compute_idf(session, pid, terms, "rms_nodes")
         rows = session.execute(
             sa_text(
-                "SELECT id, text, truth_value, source "
+                "SELECT id, text, truth_value, source, source_url "
                 "FROM rms_nodes "
                 "WHERE project_id = :pid "
                 "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
@@ -185,8 +225,9 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
             sources.append(SourceRef(
                 label=label,
                 slug=r.source,
-                url="",
+                url=r.source_url or "",
                 category="Primary",
+                cite_key=r.id,
             ))
     return context, sources
 
@@ -348,6 +389,7 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tupl
             slug=r.slug,
             url=r.url or "",
             category="Supporting",
+            cite_key=r.slug,
         ))
     return "\n\n---\n\n".join(parts), sources
 
@@ -380,6 +422,10 @@ Rules:
   even if beliefs mention related topics. Beliefs are documented knowledge from a
   point in time — they are NOT current data. Always prefer query_data for "how many",
   "what is the current", "what percentage", and similar quantitative questions.
+- IMPORTANT: For questions about specific people ("who is", "what does X do",
+  "who manages", "who works on"), you MUST call query_data to check employee
+  directory data. Beliefs may mention people incidentally but the live data
+  source has authoritative role, department, and reporting information.
 - If the belief matches below are sufficient to answer the question AND it is not
   a live-data question, write your answer directly. Do NOT call a tool.
 - If you need to search for more beliefs, respond with ONLY a single JSON line
@@ -612,9 +658,9 @@ async def dual_ask(
     resp = await llm.ainvoke(merge_prompt)
     merged = _extract_text(resp.content)
 
-    # Append sources section
+    # Append sources section (filtered to what the LLM actually cited)
     all_sources = belief_sources + chunk_sources + data_sources
-    merged += _build_sources_section(all_sources)
+    merged += _build_sources_section(all_sources, response_text=merged)
 
     return {
         "answer": merged,
@@ -681,14 +727,16 @@ async def dual_chat_stream(
     merge_prompt = MERGE_PROMPT.format(
         question=message, answer_tms=answer_tms, answer_fts=answer_fts,
     )
+    merged_text = ""
     async for chunk in llm.astream(merge_prompt):
         text = _extract_text(chunk.content) if chunk.content else ""
         if text:
+            merged_text += text
             yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
 
-    # Stream sources section
+    # Stream sources section (filtered to what the LLM actually cited)
     all_sources = belief_sources + chunk_sources + data_sources
-    sources_section = _build_sources_section(all_sources)
+    sources_section = _build_sources_section(all_sources, response_text=merged_text)
     if sources_section:
         yield f"data: {json.dumps({'type': 'token', 'content': sources_section})}\n\n"
 

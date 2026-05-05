@@ -17,7 +17,7 @@ class Settings(BaseModel):
     # Vertex AI configuration (shared with agents-python)
     google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
     google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
-    default_model: str = os.getenv("DEFAULT_MODEL", "gemini-2.5-pro")
+    default_model: str = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-20250514")
     # LangFuse tracing (optional — disabled when secret_key is empty)
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

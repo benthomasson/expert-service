@@ -72,14 +72,18 @@ def main():
             project_id = str(cur.fetchone()[0])
             print(f"Created project: {project_name} ({project_id})")
 
+        # Check if SQLite has source_url column
+        has_source_url = "source_url" in [k for k in nodes[0].keys()] if nodes else False
+
         # Bulk insert nodes
         for node in nodes:
             meta = node["metadata_json"] or "{}"
+            source_url = (node["source_url"] or "") if has_source_url else ""
             cur.execute(
-                "INSERT INTO rms_nodes (id, project_id, text, truth_value, source, source_hash, date, metadata) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO rms_nodes (id, project_id, text, truth_value, source, source_url, source_hash, date, metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (node["id"], project_id, node["text"], node["truth_value"],
-                 node["source"] or "", node["source_hash"] or "",
+                 node["source"] or "", source_url, node["source_hash"] or "",
                  node["date"] or "", meta),
             )
 

@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS rms_nodes (
     text TEXT NOT NULL,
     truth_value TEXT NOT NULL DEFAULT 'IN' CHECK (truth_value IN ('IN', 'OUT')),
     source TEXT DEFAULT '',
+    source_url TEXT DEFAULT '',
     source_hash TEXT DEFAULT '',
     date TEXT DEFAULT '',
     metadata JSONB DEFAULT '{}',
