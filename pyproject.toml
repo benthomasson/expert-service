@@ -28,6 +28,9 @@ dependencies = [
     "ftl-reasons @ git+https://github.com/benthomasson/ftl-reasons.git@main",
 ]
 
+[project.optional-dependencies]
+ollama = ["langchain-ollama>=0.3"]
+
 [project.scripts]
 expert-service = "expert_service.app:main"
 

@@ -1,7 +1,7 @@
-"""LLM provider factory — returns LangChain ChatModel instances via Vertex AI.
+"""LLM provider factory — returns LangChain ChatModel instances.
 
-Uses the same Vertex AI OAuth credentials as agents-python.
-Auth: gcloud auth application-default login
+Supports Vertex AI (Claude, Gemini) and Ollama for local models.
+Auth for Vertex AI: gcloud auth application-default login
 """
 
 from langchain_google_vertexai import ChatVertexAI
@@ -22,10 +22,23 @@ def get_chat_model(model: str | None = None, cached_content: str | None = None):
 
     For Gemini, pass cached_content (cache name from create_context_cache)
     to use server-side context caching.
+
+    Ollama models use the "ollama:" prefix (e.g. "ollama:gemma3:27b").
+    Requires: pip install expert-service[ollama]
     """
     model = model or settings.default_model
 
-    if "claude" in model:
+    if model.startswith("ollama:"):
+        try:
+            from langchain_ollama import ChatOllama
+        except ImportError:
+            raise ImportError(
+                "langchain-ollama is required for Ollama models. "
+                "Install with: pip install expert-service[ollama]"
+            )
+        ollama_model = model[len("ollama:"):]
+        return ChatOllama(model=ollama_model, base_url=settings.ollama_host)
+    elif "claude" in model:
         return ChatAnthropicVertex(
             model_name=model,
             project=settings.google_cloud_project,
