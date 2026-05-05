@@ -46,6 +46,7 @@
     .verify-status { font-size: 0.75rem; font-family: monospace; }
     .verify-text { color: var(--pico-muted-color); margin: 0.25rem 0; }
     .verify-detail { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; }
+    .message-timing { font-size: 0.7rem; color: var(--pico-muted-color); margin-top: 0.5rem; font-style: italic; }
 </style>
 {% endblock %}
 
@@ -160,6 +161,7 @@ async function sendMessage() {
 
     let contentEl = null;
     let rawMarkdown = '';
+    const startTime = performance.now();
 
     try {
         const response = await fetch('/api/meta/chat', {
@@ -224,6 +226,15 @@ async function sendMessage() {
             contentEl = appendMessage('assistant', '');
         }
         contentEl.textContent = `Error: ${err.message}`;
+    }
+
+    // Show elapsed time
+    if (contentEl) {
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+        const timingEl = document.createElement('div');
+        timingEl.className = 'message-timing';
+        timingEl.textContent = `${elapsed}s`;
+        contentEl.parentElement.appendChild(timingEl);
     }
 
     // Add verify button if citations found

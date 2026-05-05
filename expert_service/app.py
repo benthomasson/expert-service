@@ -20,6 +20,12 @@ from expert_service.rms import api as rms_api
 
 app = FastAPI(title="Expert Service", version="0.1.0")
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # API routes
 app.include_router(projects.router)
 app.include_router(pipeline.router)

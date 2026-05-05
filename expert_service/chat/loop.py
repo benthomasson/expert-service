@@ -6,6 +6,7 @@ import logging
 import math
 import re
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import text as sa_text
@@ -83,22 +84,79 @@ def _idf_score(text: str, term_idfs: dict[str, float]) -> float:
     return sum(idf for term, idf in term_idfs.items() if term in text_lower)
 
 
-def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> str:
+@dataclass
+class SourceRef:
+    """A source reference for the ## Sources section."""
+    label: str       # Display label (e.g. "Ansible 3 Pager")
+    slug: str        # Raw identifier for deduplication
+    url: str         # URL if available
+    category: str    # "Primary", "Supporting", "Data"
+
+
+def _source_title_from_path(path: str) -> str:
+    """Convert a source file path to a readable title.
+
+    entries/2026/04/17/ansible-3-pager.md → Ansible 3 Pager
+    """
+    name = path.rsplit("/", 1)[-1]
+    name = re.sub(r'\.(md|json|txt|yaml|yml)$', '', name)
+    name = name.replace("-", " ").replace("_", " ")
+    return name.strip().title()
+
+
+MAX_SOURCES = 10  # Cap displayed sources to keep responses readable
+
+
+def _build_sources_section(sources: list[SourceRef]) -> str:
+    """Build a ## Sources section from collected source refs."""
+    if not sources:
+        return ""
+    # Deduplicate by slug, preserving order
+    seen: set[str] = set()
+    unique: list[SourceRef] = []
+    for s in sources:
+        if s.slug not in seen:
+            seen.add(s.slug)
+            unique.append(s)
+
+    # Data sources always included; Primary before Supporting for the rest
+    data = [s for s in unique if s.category == "Data"]
+    rest = [s for s in unique if s.category != "Data"]
+    order = {"Primary": 0, "Supporting": 1}
+    rest.sort(key=lambda s: order.get(s.category, 9))
+    rest = rest[:MAX_SOURCES - len(data)]
+    unique = data + rest
+
+    lines = ["", "", "## Sources", ""]
+    for i, s in enumerate(unique, 1):
+        if s.url:
+            lines.append(f"[{i}] ({s.category}) {s.label}")
+            lines.append(f"[Source]({s.url})")
+        else:
+            lines.append(f"[{i}] ({s.category}) {s.label}")
+            lines.append(f"[Source: {s.slug}]")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
     """Fast belief pre-check via PostgreSQL tsvector with IDF re-ranking.
 
     Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
     IDF-weighted term matching so rare/diagnostic terms surface over common ones.
+
+    Returns (context_string, source_refs) where source_refs tracks provenance.
     """
     or_query = _build_or_tsquery(question)
     if not or_query:
-        return ""
+        return "", []
     terms = _get_query_terms(question)
     pid = str(project_id)
     with get_sync_session() as session:
         idfs = _compute_idf(session, pid, terms, "rms_nodes")
         rows = session.execute(
             sa_text(
-                "SELECT id, text, truth_value "
+                "SELECT id, text, truth_value, source "
                 "FROM rms_nodes "
                 "WHERE project_id = :pid "
                 "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
@@ -110,13 +168,27 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> st
         ).all()
 
     if not rows:
-        return ""
+        return "", []
     if idfs:
         rows = sorted(rows, key=lambda r: _idf_score(r.text, idfs), reverse=True)
     rows = rows[:limit]
-    return "\n".join(
+    context = "\n".join(
         f"[{r.truth_value}] {r.id} — {r.text}" for r in rows
     )
+    sources = []
+    for r in rows:
+        if r.source:
+            # Extract agent namespace from belief ID (e.g. "engineering:belief-name" → "engineering")
+            domain = r.id.split(":")[0] if ":" in r.id else ""
+            title = _source_title_from_path(r.source)
+            label = f'{domain}, "{title}"' if domain else f'"{title}"'
+            sources.append(SourceRef(
+                label=label,
+                slug=r.source,
+                url="",
+                category="Primary",
+            ))
+    return context, sources
 
 
 def _extract_text(content) -> str:
@@ -158,7 +230,7 @@ async def chat_stream(
 
     # Belief-first pre-check: inject matching beliefs so the LLM can
     # answer directly without a tool call when beliefs are sufficient.
-    belief_context = _quick_belief_search(project_id, message)
+    belief_context, _sources = _quick_belief_search(project_id, message)
     if belief_context:
         augmented = f"{message}\n\n[Belief matches:\n{belief_context}\n]"
         logger.info("Belief pre-check: %d matches for %r",
@@ -216,23 +288,25 @@ MAX_CHUNK_CHARS = 2000  # Truncate individual chunks
 MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
 
 
-def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
+def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
     """FTS search over source_chunks with IDF re-ranking.
 
     Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
     IDF-weighted term matching so rare/diagnostic terms (e.g. "Renewals")
     surface over common ones (e.g. "data", "strategy"). Approximates BM25.
+
+    Returns (context_string, source_refs) where source_refs tracks provenance.
     """
     or_query = _build_or_tsquery(query)
     if not or_query:
-        return ""
+        return "", []
     terms = _get_query_terms(query)
     pid = str(project_id)
     with get_sync_session() as session:
         idfs = _compute_idf(session, pid, terms, "source_chunks")
         rows = session.execute(
             sa_text(
-                "SELECT c.text, c.section, s.slug "
+                "SELECT c.text, c.section, s.slug, s.url "
                 "FROM source_chunks c "
                 "JOIN sources s ON s.id = c.source_id "
                 "WHERE c.project_id = :pid "
@@ -244,11 +318,12 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
             {"pid": pid, "q": or_query, "lim": limit * 3},
         ).all()
     if not rows:
-        return ""
+        return "", []
     if idfs:
         rows = sorted(rows, key=lambda r: _idf_score(r.text, idfs), reverse=True)
     rows = rows[:limit]
     parts = []
+    sources = []
     total = 0
     for i, r in enumerate(rows, 1):
         chunk_text = r.text[:MAX_CHUNK_CHARS]
@@ -262,7 +337,19 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> str:
             break
         parts.append(part)
         total += len(part)
-    return "\n\n---\n\n".join(parts)
+        # Extract domain and title from slug (e.g. "engineering/00 - OCP vs K8's")
+        if "/" in r.slug:
+            domain, title = r.slug.split("/", 1)
+            label = f'{domain}, "{title}"'
+        else:
+            label = f'"{r.slug}"'
+        sources.append(SourceRef(
+            label=label,
+            slug=r.slug,
+            url=r.url or "",
+            category="Supporting",
+        ))
+    return "\n\n---\n\n".join(parts), sources
 
 
 def _connector_tool_section(allowed_connectors: list[str] | None = None) -> str:
@@ -288,14 +375,20 @@ You have tools available:
 {{"tool": "search_beliefs", "query": "search terms"}}
 {connector_tools}
 Rules:
-- If the belief matches below are sufficient to answer the question, write your
-  answer directly. Do NOT call a tool.
+- IMPORTANT: For questions asking for current numbers, counts, headcount, revenue,
+  pipeline totals, or other live/temporal data: you MUST call query_data FIRST,
+  even if beliefs mention related topics. Beliefs are documented knowledge from a
+  point in time — they are NOT current data. Always prefer query_data for "how many",
+  "what is the current", "what percentage", and similar quantitative questions.
+- If the belief matches below are sufficient to answer the question AND it is not
+  a live-data question, write your answer directly. Do NOT call a tool.
 - If you need to search for more beliefs, respond with ONLY a single JSON line
   (no other text). The system will run the search and give you the results.
 - Cite belief IDs in [brackets] when referencing specific beliefs.
-- ONLY answer based on the beliefs provided. Do NOT use your training data or
-  general knowledge to fill gaps.
-- If the beliefs are insufficient to answer, say so honestly and note what's missing.
+- ONLY answer based on the beliefs and tool results provided. Do NOT use your
+  training data or general knowledge to fill gaps.
+- If the beliefs and data connectors are insufficient to answer, say so honestly
+  and note what's missing.
 
 ## Question
 
@@ -400,18 +493,23 @@ def _extract_tool_call(text: str) -> dict | None:
 async def _tms_answer_iterative(
     project_id: UUID, llm, question: str, initial_beliefs: str,
     allowed_connectors: list[str] | None = None,
-) -> str:
+) -> tuple[str, list[SourceRef]]:
     """TMS answer with up to 3 iterative search rounds, matching CLI behavior.
 
     When data connectors are available (via allowed_connectors), the LLM can
     also call query_data to fetch live data alongside belief searches.
+
+    Returns (answer_text, data_sources) where data_sources tracks connector queries.
     """
     beliefs_ctx = initial_beliefs
     if not beliefs_ctx:
-        return "No matching beliefs found in the network."
+        return "No matching beliefs found in the network.", []
 
     connector_tools = _connector_tool_section(allowed_connectors)
+    logger.info("TMS iterative: connectors=%r, tools_section=%d chars",
+                allowed_connectors, len(connector_tools))
     tool_history: list[dict] = []
+    data_sources: list[SourceRef] = []
 
     for iteration in range(MAX_TMS_ITERATIONS):
         history_section = ""
@@ -437,18 +535,18 @@ async def _tms_answer_iterative(
 
         tool_call = _extract_tool_call(response_text)
         if tool_call is None:
-            return response_text
+            return response_text, data_sources
 
         if tool_call.get("tool") == "search_beliefs":
             query = tool_call.get("query", "")
             logger.info("TMS iterative search round %d: %r", iteration + 1, query)
-            result = await asyncio.to_thread(
+            extra_ctx, _extra_sources = await asyncio.to_thread(
                 _quick_belief_search, project_id, query, 20,
             )
             tool_history.append({"tool": "search_beliefs", "query": query,
-                                 "result": result or "No results found."})
-            if result:
-                beliefs_ctx = result
+                                 "result": extra_ctx or "No results found."})
+            if extra_ctx:
+                beliefs_ctx = extra_ctx
         elif tool_call.get("tool") == "query_data":
             q = tool_call.get("question", "")
             connector = tool_call.get("connector")
@@ -458,10 +556,17 @@ async def _tms_answer_iterative(
                                       allowed=allowed_connectors)
             tool_history.append({"tool": f"query_data({connector or 'all'})",
                                  "query": q, "result": result})
+            connector_label = (connector or "data").title()
+            data_sources.append(SourceRef(
+                label=f"{connector_label} Query: {q}",
+                slug=f"{connector_label} - Direct Query",
+                url="",
+                category="Data",
+            ))
         else:
-            return response_text
+            return response_text, data_sources
 
-    return response_text
+    return response_text, data_sources
 
 
 async def dual_ask(
@@ -472,7 +577,7 @@ async def dual_ask(
 ) -> dict:
     """Dual-path: TMS (iterative) + FTS RAG in parallel, merge, return complete answer."""
     # Phase 1: parallel retrieval
-    belief_ctx, chunk_ctx = await asyncio.gather(
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
         asyncio.to_thread(_quick_belief_search, project_id, message, 20),
         asyncio.to_thread(_search_source_chunks, project_id, message, 10),
     )
@@ -494,7 +599,7 @@ async def dual_ask(
         resp = await llm.ainvoke(prompt)
         return _extract_text(resp.content)
 
-    answer_tms, answer_fts = await asyncio.gather(
+    (answer_tms, data_sources), answer_fts = await asyncio.gather(
         _tms_answer_iterative(project_id, llm, message, belief_ctx,
                               allowed_connectors=allowed_connectors),
         _rag_answer(),
@@ -506,6 +611,10 @@ async def dual_ask(
     )
     resp = await llm.ainvoke(merge_prompt)
     merged = _extract_text(resp.content)
+
+    # Append sources section
+    all_sources = belief_sources + chunk_sources + data_sources
+    merged += _build_sources_section(all_sources)
 
     return {
         "answer": merged,
@@ -531,7 +640,7 @@ async def dual_chat_stream(
     yield f"event: phase\ndata: {json.dumps({'phase': 'searching'})}\n\n"
 
     # Phase 1: parallel retrieval (sync → run in threads)
-    belief_ctx, chunk_ctx = await asyncio.gather(
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
         asyncio.to_thread(_quick_belief_search, project_id, message, 20),
         asyncio.to_thread(_search_source_chunks, project_id, message, 10),
     )
@@ -555,7 +664,7 @@ async def dual_chat_stream(
         resp = await llm.ainvoke(prompt)
         return _extract_text(resp.content)
 
-    answer_tms, answer_fts = await asyncio.gather(
+    (answer_tms, data_sources), answer_fts = await asyncio.gather(
         _tms_answer_iterative(project_id, llm, message, belief_ctx,
                               allowed_connectors=allowed_connectors),
         _rag_answer(),
@@ -576,5 +685,11 @@ async def dual_chat_stream(
         text = _extract_text(chunk.content) if chunk.content else ""
         if text:
             yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+
+    # Stream sources section
+    all_sources = belief_sources + chunk_sources + data_sources
+    sources_section = _build_sources_section(all_sources)
+    if sources_section:
+        yield f"data: {json.dumps({'type': 'token', 'content': sources_section})}\n\n"
 
     yield "event: done\ndata: {}\n\n"
