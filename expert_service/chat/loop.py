@@ -129,7 +129,7 @@ def _extract_cited_keys(text: str) -> set[str]:
     return keys
 
 
-def _build_sources_section(sources: list[SourceRef], response_text: str = "") -> str:
+def _build_sources_section(sources: list[SourceRef], response_text: str = "") -> tuple[str, dict[str, int]]:
     """Build a ## Sources section from collected source refs.
 
     If response_text is provided, only includes sources that the LLM
@@ -137,7 +137,7 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
     are always included.
     """
     if not sources:
-        return ""
+        return "", {}
 
     # Filter to cited sources if we have response text
     if response_text:
