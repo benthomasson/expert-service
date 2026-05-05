@@ -162,6 +162,7 @@ async function sendMessage() {
                             // Final render — parse full markdown
                             if (contentEl && rawMarkdown) {
                                 contentEl.innerHTML = marked.parse(rawMarkdown);
+                                addExplainButtons(contentEl);
                             }
                         } else if (data.type === 'token') {
                             // Create assistant bubble on first token
@@ -183,6 +184,7 @@ async function sendMessage() {
         // Fallback render if done event was missed
         if (contentEl && rawMarkdown) {
             contentEl.innerHTML = marked.parse(rawMarkdown);
+            addExplainButtons(contentEl);
         }
     } catch (err) {
         if (!contentEl) {
@@ -398,26 +400,30 @@ function renderSourceVerification(result) {
     </div>`;
 }
 
-async function explainBelief(button, nodeId) {
-    button.setAttribute('aria-busy', 'true');
-    try {
-        const resp = await fetch(`/api/projects/${projectId}/beliefs/${nodeId}/explain`);
-        const data = await resp.json();
-        const steps = data.steps || [];
-        if (steps.length === 0) {
-            button.replaceWith(Object.assign(document.createElement('div'),
-                { className: 'verify-detail', textContent: 'Premise — no justification chain (directly asserted).' }));
-            return;
+function addExplainButtons(container) {
+    // Find "belief: some-belief-id" in rendered HTML and replace with explain buttons
+    // After marked.parse(), these appear inside <p> tags as text
+    const paragraphs = container.querySelectorAll('p');
+    for (const p of paragraphs) {
+        const html = p.innerHTML;
+        const replaced = html.replace(
+            /belief:\s*([a-z0-9][a-z0-9._:-]*)/g,
+            (match, beliefId) => {
+                return `<button class="outline verify-btn" onclick="explainBelief(this, '${beliefId}')" `
+                    + `style="font-size:0.75rem; padding:0.1rem 0.5rem;">Why?</button>`;
+            }
+        );
+        if (replaced !== html) {
+            p.innerHTML = replaced;
         }
-        const el = document.createElement('div');
-        el.className = 'verify-detail';
-        el.innerHTML = '<ol style="margin:0.25rem 0; padding-left:1.5rem; font-size:0.8rem;">' +
-            steps.map(s => `<li><strong>${s.node}</strong> [${s.truth_value}] — ${s.reason}</li>`).join('') + '</ol>';
-        button.replaceWith(el);
-    } catch (e) {
-        button.removeAttribute('aria-busy');
-        button.textContent = 'Error';
     }
+}
+
+function explainBelief(button, nodeId) {
+    // Send "explain {belief-id}" as a chat message for full LLM-narrated explanation
+    const input = document.getElementById('chat-input');
+    input.value = `explain ${nodeId}`;
+    sendMessage();
 }
 </script>
 {% endblock %}

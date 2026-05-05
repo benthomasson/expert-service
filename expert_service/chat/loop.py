@@ -168,15 +168,49 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
     rest = rest[:MAX_SOURCES - len(data)]
     unique = data + rest
 
-    lines = ["", "", "## Sources", ""]
-    for i, s in enumerate(unique, 1):
-        lines.append(f"[{i}] ({s.category}) {s.label}")
-        if s.url:
-            lines.append(f"[Source]({s.url})")
-        else:
-            lines.append(f"[Source: {s.slug}]")
-        lines.append("")
-    return "\n".join(lines)
+    # Separate derived beliefs (no source doc) from sourced references
+    beliefs = [s for s in unique if s.category == "Primary" and not s.url and "/" not in s.slug]
+    sourced = [s for s in unique if s not in beliefs]
+
+    # Build cite_key → number mapping for inline replacement
+    cite_map: dict[str, int] = {}
+    lines = []
+    idx = 1
+
+    if sourced:
+        lines += ["", "", "## Sources", ""]
+        for s in sourced:
+            if s.cite_key:
+                cite_map[s.cite_key] = idx
+            lines.append(f"[{idx}] ({s.category}) {s.label}")
+            if s.url:
+                lines.append(f"[Source]({s.url})")
+            elif "/" in s.slug:
+                lines.append(f"[Source: {s.slug}]")
+            lines.append("")
+            idx += 1
+
+    if beliefs:
+        lines += ["", "## Beliefs", ""]
+        for s in beliefs:
+            if s.cite_key:
+                cite_map[s.cite_key] = idx
+            lines.append(f"[{idx}] {s.label}")
+            lines.append(f"belief: {s.cite_key}")
+            lines.append("")
+            idx += 1
+
+    return "\n".join(lines), cite_map
+
+
+def _replace_inline_citations(text: str, cite_map: dict[str, int]) -> str:
+    """Replace raw [belief-id] and [slug] markers with numbered [N] refs."""
+    if not cite_map:
+        return text
+    # Sort by length descending to avoid partial matches
+    for key in sorted(cite_map, key=len, reverse=True):
+        text = text.replace(f"[{key}]", f"[{cite_map[key]}]")
+    return text
 
 
 def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
@@ -217,18 +251,26 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
     )
     sources = []
     for r in rows:
+        # Extract agent namespace from belief ID (e.g. "engineering:belief-name" → "engineering")
+        domain = r.id.split(":")[0] if ":" in r.id else ""
         if r.source:
-            # Extract agent namespace from belief ID (e.g. "engineering:belief-name" → "engineering")
-            domain = r.id.split(":")[0] if ":" in r.id else ""
             title = _source_title_from_path(r.source)
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
-            sources.append(SourceRef(
-                label=label,
-                slug=r.source,
-                url=r.source_url or "",
-                category="Primary",
-                cite_key=r.id,
-            ))
+            slug = r.source
+            url = r.source_url or ""
+        else:
+            # Derived beliefs without source docs — use belief ID as identifier
+            title = r.id.split(":", 1)[-1].replace("-", " ").title()
+            label = f'{domain}, "{title}"' if domain else f'"{title}"'
+            slug = r.id
+            url = ""
+        sources.append(SourceRef(
+            label=label,
+            slug=slug,
+            url=url,
+            category="Primary",
+            cite_key=r.id,
+        ))
     return context, sources
 
 
@@ -660,7 +702,9 @@ async def dual_ask(
 
     # Append sources section (filtered to what the LLM actually cited)
     all_sources = belief_sources + chunk_sources + data_sources
-    merged += _build_sources_section(all_sources, response_text=merged)
+    sources_section, cite_map = _build_sources_section(all_sources, response_text=merged)
+    merged = _replace_inline_citations(merged, cite_map)
+    merged += sources_section
 
     return {
         "answer": merged,
@@ -736,7 +780,7 @@ async def dual_chat_stream(
 
     # Stream sources section (filtered to what the LLM actually cited)
     all_sources = belief_sources + chunk_sources + data_sources
-    sources_section = _build_sources_section(all_sources, response_text=merged_text)
+    sources_section, _cite_map = _build_sources_section(all_sources, response_text=merged_text)
     if sources_section:
         yield f"data: {json.dumps({'type': 'token', 'content': sources_section})}\n\n"
 
