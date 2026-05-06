@@ -1,5 +1,8 @@
 """Authentication: Google OAuth + bearer token with dev-mode bypass."""
 
+import hmac
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -10,6 +13,8 @@ from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import User
 from expert_service.rbac import UserInfo, Role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -85,7 +90,7 @@ async def verify_auth(
     """Authenticate via bearer token, OAuth session, or dev-mode bypass."""
 
     # 1. Bearer token (API/programmatic access)
-    if credentials and settings.api_key and credentials.credentials == settings.api_key:
+    if credentials and settings.api_key and hmac.compare_digest(credentials.credentials, settings.api_key):
         user = UserInfo(identity="api", role=Role.ADMIN)
         request.state.user = user
         return user
@@ -114,6 +119,11 @@ async def verify_auth(
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 
+class _LoginRedirect(Exception):
+    """Raised to trigger a redirect to /login for unauthenticated web requests."""
+    pass
+
+
 async def verify_auth_web(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
@@ -124,8 +134,5 @@ async def verify_auth_web(
         return await verify_auth(request, credentials, session)
     except HTTPException as e:
         if e.status_code == 401:
-            raise HTTPException(
-                status_code=307,
-                headers={"Location": "/login"},
-            )
+            raise _LoginRedirect()
         raise

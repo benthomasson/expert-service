@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
 from expert_service.api import projects, pipeline, data, chat, meta_chat, ask
-from expert_service.auth import router as auth_router, verify_auth, verify_auth_web
+from expert_service.auth import router as auth_router, verify_auth, verify_auth_web, _LoginRedirect
 from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import Assessment, Entry, Project, Source
@@ -30,6 +30,13 @@ app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 # OAuth setup (optional — disabled when credentials not set)
 oauth = None
 if settings.google_client_id and settings.google_client_secret:
+    if settings.secret_key == "dev-insecure-key":
+        import warnings
+        warnings.warn(
+            "SECRET_KEY is set to the default insecure value. "
+            "Set SECRET_KEY to a random string for production use.",
+            stacklevel=1,
+        )
     from authlib.integrations.starlette_client import OAuth
 
     oauth = OAuth()
@@ -40,6 +47,11 @@ if settings.google_client_id and settings.google_client_secret:
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={"scope": "openid email profile"},
     )
+
+
+@app.exception_handler(_LoginRedirect)
+async def login_redirect_handler(request: Request, exc: _LoginRedirect):
+    return RedirectResponse(url="/login")
 
 
 @app.get("/health")
