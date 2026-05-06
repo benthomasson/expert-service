@@ -4,12 +4,12 @@
 Optionally loads entries and sources from the expert repo directory.
 
 Usage:
-    python scripts/load_reasons_db.py <reasons.db path> <project_name> [--domain <domain>] [--entries-dir <path>] [--sources-dir <path>]
+    python scripts/load_reasons_db.py <reasons.db path> <project_name> [--domain <domain>] [--entries-dir <path> ...] [--sources-dir <path>]
 
 Examples:
     python scripts/load_reasons_db.py ~/git/redhat-expert/reasons.db redhat-expert --domain "Red Hat strategy"
     python scripts/load_reasons_db.py ~/git/ftl-reasons-expert/reasons.db ftl-reasons-expert --domain "TMS library" --entries-dir ~/git/ftl-reasons-expert/entries
-    python scripts/load_reasons_db.py ~/git/agents-python-meta-expert/reasons.db meta-expert --domain "Cross-domain analysis" --entries-dir ~/git/agents-python-meta-expert/entries --sources-dir ~/git/agents-python-meta-expert/sources
+    python scripts/load_reasons_db.py ~/git/agents-python-meta-expert/reasons.db meta-expert --domain "Cross-domain analysis" --entries-dir ~/git/agents-python-meta-expert/entries ~/git/agents-python-expert/entries ~/git/agents-python-project-expert/entries
 """
 
 import hashlib
@@ -89,6 +89,21 @@ def _parse_arg(flag: str) -> str | None:
     return None
 
 
+def _parse_arg_multi(flag: str) -> list[str]:
+    """Extract all values after --flag until the next --flag or end of args."""
+    values = []
+    i = 0
+    while i < len(sys.argv):
+        if sys.argv[i] == flag:
+            i += 1
+            while i < len(sys.argv) and not sys.argv[i].startswith("--"):
+                values.append(sys.argv[i])
+                i += 1
+        else:
+            i += 1
+    return values
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -97,7 +112,7 @@ def main():
     db_path = sys.argv[1]
     project_name = sys.argv[2]
     domain = _parse_arg("--domain") or "general"
-    entries_dir = _parse_arg("--entries-dir")
+    entries_dirs = _parse_arg_multi("--entries-dir")
     sources_dir = _parse_arg("--sources-dir")
 
     conninfo = "postgresql://ben@localhost:5432/expert_service"
@@ -202,14 +217,17 @@ def main():
         # Import entries (also as sources + chunks for FTS RAG)
         entry_count = 0
         chunk_count = 0
-        if entries_dir:
-            entries_path = Path(entries_dir).expanduser().resolve()
-            if entries_path.is_dir():
-                # Clear existing entries and their sources/chunks
-                cur.execute("DELETE FROM entries WHERE project_id = %s", (project_id,))
-                if not sources_dir:
-                    # Only clear sources if we didn't already clear them above
-                    cur.execute("DELETE FROM sources WHERE project_id = %s", (project_id,))
+        if entries_dirs:
+            # Clear existing entries and their sources/chunks once before loading
+            cur.execute("DELETE FROM entries WHERE project_id = %s", (project_id,))
+            if not sources_dir:
+                cur.execute("DELETE FROM sources WHERE project_id = %s", (project_id,))
+
+            for entries_dir in entries_dirs:
+                entries_path = Path(entries_dir).expanduser().resolve()
+                if not entries_path.is_dir():
+                    print(f"  Warning: entries dir not found: {entries_path}")
+                    continue
 
                 entries = find_entries(entries_path)
                 for e in entries:
@@ -240,10 +258,11 @@ def main():
                         )
                         chunk_count += 1
 
-                entry_count = len(entries)
-                print(f"  {entry_count} entries imported ({chunk_count} chunks)")
-            else:
-                print(f"  Warning: entries dir not found: {entries_path}")
+                dir_count = len(entries)
+                entry_count += dir_count
+                print(f"  {dir_count} entries from {entries_path.name} ({entries_path})")
+
+            print(f"  {entry_count} total entries imported ({chunk_count} chunks)")
 
     pg.commit()
     pg.close()
@@ -253,8 +272,8 @@ def main():
     print(f"  {len(nodes)} nodes ({in_count} IN, {len(nodes) - in_count} OUT)")
     print(f"  {len(justifications)} justifications")
     print(f"  {len(nogoods)} nogoods")
-    if entries_dir:
-        print(f"  {entry_count} entries")
+    if entries_dirs:
+        print(f"  {entry_count} entries ({chunk_count} chunks)")
     if sources_dir:
         print(f"  {source_count} sources")
     print(f"\nTest with:")
