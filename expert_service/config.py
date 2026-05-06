@@ -29,7 +29,6 @@ class Settings(BaseModel):
     google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     secret_key: str = os.getenv("SECRET_KEY", "dev-insecure-key")
     api_key: str = os.getenv("EXPERT_SERVICE_API_KEY", "")
-    allowed_emails: str = os.getenv("ALLOWED_EMAILS", "")
 
 
 settings = Settings()

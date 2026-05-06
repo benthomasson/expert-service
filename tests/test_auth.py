@@ -1,6 +1,6 @@
 """Tests for authentication and RBAC."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -129,57 +129,23 @@ class TestBearerToken:
 # --- OAuth session ---
 
 
-class TestOAuthSession:
-    """Session-based authentication after OAuth login."""
+class TestNoSession:
+    """When OAuth is configured but no session cookie is present."""
 
-    def test_valid_session_with_registered_user(self, client):
-        mock_user = MagicMock()
-        mock_user.role = "editor"
-        mock_user.display_name = "Test User"
-
-        with patch("expert_service.auth.settings") as mock_settings, \
-             patch("expert_service.auth.get_session") as mock_get_session:
+    def test_no_session_returns_401(self, client):
+        """Without a session cookie, should get 401 when OAuth is configured."""
+        with patch("expert_service.auth.settings") as mock_settings:
             mock_settings.api_key = ""
             mock_settings.google_client_id = "set"
-
-            mock_session = AsyncMock()
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = mock_user
-            mock_session.execute.return_value = mock_result
-
-            async def _yield_session():
-                yield mock_session
-
-            mock_get_session.return_value = _yield_session()
-
-            # Set session cookie by going through the middleware
-            # We need to simulate a session with user_email set
-            # The simplest way is to patch request.session
             resp = client.get("/protected")
-
-        # Without a session cookie, should get 401 (OAuth configured, no bearer)
         assert resp.status_code == 401
 
-    def test_session_with_unregistered_email_returns_403(self, client):
-        with patch("expert_service.auth.settings") as mock_settings, \
-             patch("expert_service.auth.get_session") as mock_get_session:
-            mock_settings.api_key = ""
+    def test_no_session_no_bearer_returns_401(self, client):
+        """Neither session nor bearer token — 401."""
+        with patch("expert_service.auth.settings") as mock_settings:
+            mock_settings.api_key = "some-key"
             mock_settings.google_client_id = "set"
-
-            mock_session = AsyncMock()
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = None
-            mock_session.execute.return_value = mock_result
-
-            async def _yield_session():
-                yield mock_session
-
-            mock_get_session.return_value = _yield_session()
-
-            # Simulate session with email by setting cookie
-            # Since we can't easily set session data, test the 401 path
             resp = client.get("/protected")
-
         assert resp.status_code == 401
 
 
@@ -236,24 +202,17 @@ class TestWebAuthRedirect:
         assert resp.status_code == 200
         assert resp.json()["identity"] == "api"
 
-    def test_web_403_is_not_redirected(self):
-        """403 (registered but forbidden) should NOT redirect to login."""
+    def test_unauthenticated_web_gets_redirected(self):
+        """401 (no credentials) should redirect to /login."""
         app = _make_app()
         client = TestClient(app, follow_redirects=False)
 
-        mock_user = MagicMock()
-        mock_user.role = "reader"
-        mock_user.display_name = "Reader"
-
-        # 403 only happens when session email exists but user not in DB
-        # That path raises 403, which should pass through (not redirect)
         with patch("expert_service.auth.settings") as mock_settings:
             mock_settings.api_key = ""
             mock_settings.google_client_id = "set"
-            # Without session, we get 401 -> redirect, not 403
-            # This test verifies the redirect only happens for 401
             resp = client.get("/web-protected")
-        assert resp.status_code == 307  # 401 -> redirect
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/login"
 
 
 # --- Login/logout routes ---

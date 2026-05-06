@@ -66,6 +66,8 @@ async def auth_callback(request: Request, session: AsyncSession = Depends(get_se
             status_code=403,
         )
 
+    # Clear existing session to prevent session fixation
+    request.session.clear()
     request.session["user_email"] = email
     request.session["user_name"] = userinfo.get("name", email)
     return RedirectResponse(url="/")
