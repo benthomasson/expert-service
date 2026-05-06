@@ -171,6 +171,66 @@ async def chat_page(request: Request, project_id: UUID, session: AsyncSession = 
     })
 
 
+@app.get("/projects/{project_id}/source/{path:path}", response_class=HTMLResponse)
+async def source_view(
+    request: Request,
+    project_id: UUID,
+    path: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Render a source document by its path (e.g. entries/2026/04/23/scan-ftl-reasons.md).
+
+    Looks up the entry by matching the topic (filename stem) against entries in the project.
+    """
+    project = (await session.execute(
+        select(Project).where(Project.id == project_id)
+    )).scalar_one_or_none()
+    if not project:
+        return HTMLResponse("Project not found", status_code=404)
+
+    # Extract topic from path: "entries/2026/04/23/scan-ftl-reasons.md" → "scan-ftl-reasons"
+    topic = Path(path).stem
+
+    entry = (await session.execute(
+        select(Entry).where(Entry.project_id == project_id, Entry.topic == topic).limit(1)
+    )).scalar_one_or_none()
+    if not entry:
+        return HTMLResponse(f"Source not found: {path}", status_code=404)
+
+    return templates.TemplateResponse(request, "entries/view.html", {
+        "project": {"id": project_id, "name": project.name},
+        "entry": {"id": entry.id, "title": entry.title, "topic": entry.topic},
+        "content_json": json.dumps(entry.content),
+    })
+
+
+@app.get("/projects/{project_id}/entries/{entry_id}/view", response_class=HTMLResponse)
+async def entry_view(
+    request: Request,
+    project_id: UUID,
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Render an entry's markdown content in a simple viewer."""
+    project = (await session.execute(
+        select(Project).where(Project.id == project_id)
+    )).scalar_one_or_none()
+    if not project:
+        return HTMLResponse("Project not found", status_code=404)
+
+    entry = (await session.execute(
+        select(Entry).where(Entry.project_id == project_id, Entry.id == entry_id)
+    )).scalar_one_or_none()
+    if not entry:
+        return HTMLResponse("Entry not found", status_code=404)
+
+    return templates.TemplateResponse(request, "entries/view.html", {
+        "project": {"id": project_id, "name": project.name},
+        "entry": {"id": entry.id, "title": entry.title, "topic": entry.topic},
+        "content_json": json.dumps(entry.content),
+    })
+
+
 @app.get("/projects/{project_id}/entries/{entry_id}/report", response_class=HTMLResponse)
 async def entry_report(
     request: Request,

@@ -4,6 +4,14 @@
 
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+const renderer = new marked.Renderer();
+renderer.link = function({ href, title, text }) {
+    const titleAttr = title ? ` title="${title}"` : '';
+    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener">${text}</a>`;
+};
+marked.setOptions({ renderer });
+</script>
 <style>
     .chat-container { display: flex; flex-direction: column; height: calc(100vh - 200px); }
     .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }

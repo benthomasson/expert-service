@@ -258,6 +258,9 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
             slug = r.source
             url = r.source_url or ""
+            # Generate internal URL for entries without external URLs
+            if not url and "/" in r.source:
+                url = f"/projects/{project_id}/source/{r.source}"
         else:
             # Derived beliefs without source docs — use belief ID as identifier
             title = r.id.split(":", 1)[-1].replace("-", " ").title()
@@ -426,10 +429,14 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tupl
             label = f'{domain}, "{title}"'
         else:
             label = f'"{r.slug}"'
+        url = r.url or ""
+        if not url:
+            # Generate internal URL to view the source entry
+            url = f"/projects/{project_id}/source/{r.slug}"
         sources.append(SourceRef(
             label=label,
             slug=r.slug,
-            url=r.url or "",
+            url=url,
             category="Supporting",
             cite_key=r.slug,
         ))
