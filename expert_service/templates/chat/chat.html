@@ -5,10 +5,20 @@
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
+function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
 const renderer = new marked.Renderer();
 renderer.link = function({ href, title, text }) {
-    const titleAttr = title ? ` title="${title}"` : '';
-    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener">${text}</a>`;
+    // Only allow http(s) and relative URLs — block javascript: and data: protocols
+    if (href && !/^https?:\/\//i.test(href) && !href.startsWith('/')) {
+        return escapeHtml(text);
+    }
+    const safeHref = escapeHtml(href || '');
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
 };
 marked.setOptions({ renderer });
 </script>
