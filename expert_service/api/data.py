@@ -188,7 +188,7 @@ async def search(
     belief_results = await session.execute(
         text(
             "SELECT id, text, truth_value FROM rms_nodes "
-            "WHERE project_id = :pid "
+            "WHERE project_id = :pid AND truth_value = 'IN' "
             "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
             "LIMIT 20"
         ),
