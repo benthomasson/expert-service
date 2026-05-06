@@ -24,6 +24,11 @@ class Settings(BaseModel):
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_host: str = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    # Auth (optional — when unset, dev mode allows anonymous access)
+    google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    secret_key: str = os.getenv("SECRET_KEY", "dev-insecure-key")
+    api_key: str = os.getenv("EXPERT_SERVICE_API_KEY", "")
 
 
 settings = Settings()

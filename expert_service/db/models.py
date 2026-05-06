@@ -24,6 +24,16 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    email = Column(String, primary_key=True)
+    role = Column(String, nullable=False, default="reader")
+    display_name = Column(String)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Project(Base):
     __tablename__ = "projects"
 
