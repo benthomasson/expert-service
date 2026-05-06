@@ -27,6 +27,22 @@
 <div class="entry-content" id="entry"></div>
 
 <script>
+function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+const renderer = new marked.Renderer();
+renderer.link = function({ href, title, text }) {
+    if (href && !/^https?:\/\//i.test(href) && !href.startsWith('/')) {
+        return escapeHtml(text);
+    }
+    const safeHref = escapeHtml(href || '');
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener">${escapeHtml(text)}</a>`;
+};
+marked.setOptions({ renderer });
+
 const rawMarkdown = {{ content_json | safe }};
 document.getElementById('entry').innerHTML = marked.parse(rawMarkdown);
 </script>
