@@ -52,14 +52,16 @@ def _build_or_tsquery(question: str) -> str:
 
 
 def _compute_idf(session, project_id: str, terms: list[str],
-                 table: str, text_col: str = "text") -> dict[str, float]:
+                 table: str, text_col: str = "text",
+                 extra_where: str = "") -> dict[str, float]:
     """Compute IDF weight for each query term against a table's tsvector index.
 
     IDF = log((N + 1) / (df + 1)) where N = total docs, df = docs containing term.
     Rare terms get high weight, common terms get low weight — approximates BM25.
     """
+    where = f"WHERE project_id = :pid {extra_where}"
     total = session.execute(
-        sa_text(f"SELECT count(*) FROM {table} WHERE project_id = :pid"),
+        sa_text(f"SELECT count(*) FROM {table} {where}"),
         {"pid": project_id},
     ).scalar() or 0
     if total == 0:
@@ -69,7 +71,7 @@ def _compute_idf(session, project_id: str, terms: list[str],
         df = session.execute(
             sa_text(
                 f"SELECT count(*) FROM {table} "
-                f"WHERE project_id = :pid "
+                f"{where} "
                 f"AND to_tsvector('english', {text_col}) @@ to_tsquery('english', :term)"
             ),
             {"pid": project_id, "term": term},
@@ -227,12 +229,13 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
     terms = _get_query_terms(question)
     pid = str(project_id)
     with get_sync_session() as session:
-        idfs = _compute_idf(session, pid, terms, "rms_nodes")
+        idfs = _compute_idf(session, pid, terms, "rms_nodes",
+                               extra_where="AND truth_value = 'IN'")
         rows = session.execute(
             sa_text(
                 "SELECT id, text, truth_value, source, source_url "
                 "FROM rms_nodes "
-                "WHERE project_id = :pid "
+                "WHERE project_id = :pid AND truth_value = 'IN' "
                 "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
                 "ORDER BY ts_rank_cd(to_tsvector('english', text), "
                 "         to_tsquery('english', :q)) DESC "

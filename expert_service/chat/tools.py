@@ -54,7 +54,7 @@ def make_tools(project_id: UUID) -> list:
             belief_rows = session.execute(
                 text(
                     "SELECT id, text, truth_value FROM rms_nodes "
-                    "WHERE project_id = :pid "
+                    "WHERE project_id = :pid AND truth_value = 'IN' "
                     "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
                     "LIMIT 10"
                 ),
@@ -222,7 +222,7 @@ def make_tools(project_id: UUID) -> list:
             belief_rows = session.execute(
                 text(
                     "SELECT id, text, truth_value FROM rms_nodes "
-                    "WHERE project_id = :pid AND text ILIKE :pat LIMIT 10"
+                    "WHERE project_id = :pid AND truth_value = 'IN' AND text ILIKE :pat LIMIT 10"
                 ),
                 {"pid": str(project_id), "pat": like_pattern},
             ).all()
