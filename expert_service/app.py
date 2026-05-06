@@ -11,14 +11,35 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.sessions import SessionMiddleware
 
 from expert_service.api import projects, pipeline, data, chat, meta_chat, ask
+from expert_service.auth import router as auth_router, verify_auth, verify_auth_web
+from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import Assessment, Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
+from expert_service.rbac import UserInfo
 from expert_service.rms import api as rms_api
 
 app = FastAPI(title="Expert Service", version="0.1.0")
+
+# Session middleware for OAuth cookie sessions
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+
+# OAuth setup (optional — disabled when credentials not set)
+oauth = None
+if settings.google_client_id and settings.google_client_secret:
+    from authlib.integrations.starlette_client import OAuth
+
+    oauth = OAuth()
+    oauth.register(
+        name="google",
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
 
 
 @app.get("/health")
@@ -26,13 +47,16 @@ async def health():
     return {"status": "ok"}
 
 
-# API routes
-app.include_router(projects.router)
-app.include_router(pipeline.router)
-app.include_router(data.router)
-app.include_router(chat.router)
-app.include_router(meta_chat.router)
-app.include_router(ask.router)
+# Auth routes (login/callback/logout — always public)
+app.include_router(auth_router)
+
+# API routes (protected by auth)
+app.include_router(projects.router, dependencies=[Depends(verify_auth)])
+app.include_router(pipeline.router, dependencies=[Depends(verify_auth)])
+app.include_router(data.router, dependencies=[Depends(verify_auth)])
+app.include_router(chat.router, dependencies=[Depends(verify_auth)])
+app.include_router(meta_chat.router, dependencies=[Depends(verify_auth)])
+app.include_router(ask.router, dependencies=[Depends(verify_auth)])
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -42,7 +66,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, session: AsyncSession = Depends(get_session)):
+async def home(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
     """Projects list page."""
     result = await session.execute(select(Project).order_by(Project.created_at.desc()))
     project_list = result.scalars().all()
@@ -75,7 +99,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
 
 
 @app.get("/meta/chat", response_class=HTMLResponse)
-async def meta_chat_page(request: Request, session: AsyncSession = Depends(get_session)):
+async def meta_chat_page(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
     """Meta-expert chat page — routes questions across all domain experts."""
     result = await session.execute(select(Project).order_by(Project.name))
     project_list = result.scalars().all()
@@ -90,7 +114,7 @@ async def meta_chat_page(request: Request, session: AsyncSession = Depends(get_s
 
 
 @app.get("/projects/new", response_class=HTMLResponse)
-async def new_project_form(request: Request):
+async def new_project_form(request: Request, _user: UserInfo = Depends(verify_auth_web)):
     return templates.TemplateResponse(request, "projects/create.html")
 
 
@@ -99,6 +123,7 @@ async def create_project_form(
     request: Request,
     name: str = Form(...),
     domain: str = Form(...),
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     project = Project(name=name, domain=domain)
@@ -113,6 +138,7 @@ async def create_project_form(
 async def project_detail(
     request: Request,
     project_id: UUID,
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(select(Project).where(Project.id == project_id))
@@ -158,7 +184,7 @@ async def project_detail(
 
 
 @app.get("/projects/{project_id}/chat", response_class=HTMLResponse)
-async def chat_page(request: Request, project_id: UUID, session: AsyncSession = Depends(get_session)):
+async def chat_page(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
@@ -176,6 +202,7 @@ async def source_view(
     request: Request,
     project_id: UUID,
     path: str,
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     """Render a source document by its path (e.g. entries/2026/04/23/scan-ftl-reasons.md).
@@ -209,6 +236,7 @@ async def entry_view(
     request: Request,
     project_id: UUID,
     entry_id: str,
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     """Render an entry's markdown content in a simple viewer."""
@@ -236,6 +264,7 @@ async def entry_report(
     request: Request,
     project_id: UUID,
     entry_id: str,
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     """Render an entry as an interactive report with Explain/What-if buttons on belief references."""
@@ -259,7 +288,7 @@ async def entry_report(
 
 
 @app.get("/projects/{project_id}/ingest", response_class=HTMLResponse)
-async def ingest_form(request: Request, project_id: UUID, session: AsyncSession = Depends(get_session)):
+async def ingest_form(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
@@ -273,6 +302,7 @@ async def ingest_form(request: Request, project_id: UUID, session: AsyncSession 
 async def beliefs_review_page(
     request: Request,
     project_id: UUID,
+    _user: UserInfo = Depends(verify_auth_web),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(select(Project).where(Project.id == project_id))
@@ -294,6 +324,7 @@ async def beliefs_review_page(
 async def beliefs_review_submit(
     request: Request,
     project_id: UUID,
+    _user: UserInfo = Depends(verify_auth_web),
 ):
     """Handle form submission of belief review decisions."""
     form_data = await request.form()
