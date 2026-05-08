@@ -680,7 +680,11 @@ async def dual_ask(
         asyncio.to_thread(_search_source_chunks, project_id, message, 10),
     )
 
-    if not belief_ctx and not chunk_ctx:
+    # Check if connectors are available before short-circuiting
+    from expert_service.connectors import ConnectorRegistry
+    has_connectors = bool(ConnectorRegistry.get().list_connectors(allowed_connectors))
+
+    if not belief_ctx and not chunk_ctx and not has_connectors:
         return {
             "answer": "No matching beliefs or source documents found for this question.",
             "tms_chars": 0,
@@ -745,7 +749,11 @@ async def dual_chat_stream(
         asyncio.to_thread(_search_source_chunks, project_id, message, 10),
     )
 
-    if not belief_ctx and not chunk_ctx:
+    # Check if connectors are available before short-circuiting
+    from expert_service.connectors import ConnectorRegistry
+    has_connectors = bool(ConnectorRegistry.get().list_connectors(allowed_connectors))
+
+    if not belief_ctx and not chunk_ctx and not has_connectors:
         yield (
             f"data: {json.dumps({'type': 'token', 'content': 'No matching beliefs or source documents found for this question.'})}\n\n"
         )
