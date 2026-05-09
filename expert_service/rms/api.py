@@ -250,9 +250,10 @@ def import_network(project_id: UUID, network) -> dict:
                 for j in node.justifications:
                     if j.type == "SL" and not j.antecedents and not j.outlist:
                         continue  # skip bare SL created by add_node
-                    api.add_node(
-                        node.id, node.text,
+                    api.add_justification(
+                        node.id,
                         sl=",".join(j.antecedents) if j.type == "SL" else "",
+                        cp=",".join(j.antecedents) if j.type == "CP" else "",
                         unless=",".join(j.outlist) if j.outlist else "",
                         label=j.label or "",
                     )
