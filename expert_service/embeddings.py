@@ -1,14 +1,17 @@
-"""Embedding generation and storage using fastembed + pgvector."""
+"""Embedding generation and storage using fastembed + pgvector.
+
+Requires pgvector extension — skipped entirely on SQLite.
+"""
 
 from uuid import UUID
 
-from fastembed import TextEmbedding
 from sqlalchemy import delete, select
-
 from sqlalchemy import text as sa_text
 
+from expert_service.config import settings
 from expert_service.db.connection import get_sync_session
 from expert_service.db.models import Embedding, Entry, Source
+from expert_service.rms import api as rms_api
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
@@ -16,7 +19,8 @@ EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 _model = None
 
 
-def _get_model() -> TextEmbedding:
+def _get_model():
+    from fastembed import TextEmbedding
     global _model
     if _model is None:
         _model = TextEmbedding(EMBED_MODEL)
@@ -24,11 +28,13 @@ def _get_model() -> TextEmbedding:
 
 
 def build_embeddings(project_id: UUID) -> dict[str, int]:
-    """Build embeddings for all entries, claims, and sources in a project.
+    """Build embeddings for all entries, beliefs, and sources in a project.
 
-    Deletes existing embeddings for the project first (idempotent).
-    Returns counts of embedded items by type.
+    Requires pgvector — returns empty counts on SQLite.
     """
+    if settings.db_backend == "sqlite" or Embedding is None:
+        return {"entries": 0, "beliefs": 0, "sources": 0}
+
     model = _get_model()
 
     with get_sync_session() as session:

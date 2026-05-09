@@ -4,9 +4,7 @@ import logging
 from uuid import UUID
 
 from langchain_core.messages import SystemMessage
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.prebuilt import create_react_agent
-from psycopg_pool import AsyncConnectionPool
 
 from expert_service.chat.tools import make_tools
 from expert_service.config import settings
@@ -48,26 +46,36 @@ Answer rules:
 # Cached agents keyed by (project_id, model)
 _agents: dict[tuple, object] = {}
 
-# Async connection pool + checkpointer (lazy-initialized)
-_pool: AsyncConnectionPool | None = None
-_checkpointer: AsyncPostgresSaver | None = None
+# Checkpointer (lazy-initialized)
+_pool = None
+_checkpointer = None
 
 
-async def get_checkpointer() -> AsyncPostgresSaver:
-    """Get or create the async PostgreSQL checkpointer."""
+async def get_checkpointer():
+    """Get or create the LangGraph checkpointer.
+
+    PostgreSQL: AsyncPostgresSaver with connection pool.
+    SQLite: MemorySaver (in-memory, ephemeral — chat history lost on restart).
+    """
     global _pool, _checkpointer
     if _checkpointer is None:
-        # Strip SQLAlchemy dialect prefix for raw psycopg connection
-        conn_string = settings.database_url_sync.replace("postgresql+psycopg://", "postgresql://")
-        _pool = AsyncConnectionPool(
-            conn_string,
-            open=False,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-        )
-        await _pool.open()
-        _checkpointer = AsyncPostgresSaver(_pool)
-        await _checkpointer.setup()
-        logger.info("Async PostgreSQL checkpointer initialized")
+        if settings.db_backend == "sqlite":
+            from langgraph.checkpoint.memory import MemorySaver
+            _checkpointer = MemorySaver()
+            logger.info("MemorySaver checkpointer initialized (SQLite mode)")
+        else:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from psycopg_pool import AsyncConnectionPool
+            conn_string = settings.database_url_sync.replace("postgresql+psycopg://", "postgresql://")
+            _pool = AsyncConnectionPool(
+                conn_string,
+                open=False,
+                kwargs={"autocommit": True, "prepare_threshold": 0},
+            )
+            await _pool.open()
+            _checkpointer = AsyncPostgresSaver(_pool)
+            await _checkpointer.setup()
+            logger.info("Async PostgreSQL checkpointer initialized")
     return _checkpointer
 
 

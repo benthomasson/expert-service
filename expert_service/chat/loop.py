@@ -15,7 +15,9 @@ from expert_service.chat.agent import get_agent
 from expert_service.config import settings
 from expert_service.connectors import ConnectorRegistry, query_data
 from expert_service.db.connection import get_sync_session
+from expert_service.db.search import fts_clause
 from expert_service.llm.provider import get_chat_model
+from expert_service.rms import api as rms_api
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,11 @@ def _compute_idf(session, project_id: str, terms: list[str],
 
     IDF = log((N + 1) / (df + 1)) where N = total docs, df = docs containing term.
     Rare terms get high weight, common terms get low weight — approximates BM25.
+
+    Requires PostgreSQL tsvector; returns empty dict on SQLite (no IDF re-ranking).
     """
+    if settings.db_backend == "sqlite":
+        return {}
     where = f"WHERE project_id = :pid {extra_where}"
     total = session.execute(
         sa_text(f"SELECT count(*) FROM {table} {where}"),
@@ -221,66 +227,56 @@ def _replace_inline_citations(text: str, cite_map: dict[str, int]) -> str:
 
 
 def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
-    """Fast belief pre-check via PostgreSQL tsvector with IDF re-ranking.
+    """Fast belief pre-check with IDF re-ranking.
 
-    Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
-    IDF-weighted term matching so rare/diagnostic terms surface over common ones.
+    PostgreSQL: tsvector FTS with ts_rank_cd baseline, IDF re-ranking.
+    SQLite: delegates to rms_api.search_beliefs_fts (reasons_lib FTS5).
 
     Returns (context_string, source_refs) where source_refs tracks provenance.
     """
-    or_query = _build_or_tsquery(question)
-    if not or_query:
+    # Get belief rows (backend-dispatched)
+    belief_rows = rms_api.search_beliefs_fts(project_id, question, limit * 3)
+    if not belief_rows:
         return "", []
-    terms = _get_query_terms(question)
-    pid = str(project_id)
-    with get_sync_session() as session:
-        idfs = _compute_idf(session, pid, terms, "rms_nodes",
-                               extra_where="AND truth_value = 'IN'")
-        rows = session.execute(
-            sa_text(
-                "SELECT id, text, truth_value, source, source_url "
-                "FROM rms_nodes "
-                "WHERE project_id = :pid AND truth_value = 'IN' "
-                "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
-                "ORDER BY ts_rank_cd(to_tsvector('english', text), "
-                "         to_tsquery('english', :q)) DESC "
-                "LIMIT :lim"
-            ),
-            {"pid": pid, "q": or_query, "lim": limit * 3},
-        ).all()
 
-    if not rows:
-        return "", []
-    if idfs:
-        rows = sorted(rows, key=lambda r: _idf_score(r.text, idfs), reverse=True)
-    rows = rows[:limit]
+    # IDF re-ranking (PostgreSQL only; returns empty dict on SQLite)
+    if settings.db_backend == "postgresql":
+        terms = _get_query_terms(question)
+        pid = str(project_id)
+        with get_sync_session() as session:
+            idfs = _compute_idf(session, pid, terms, "rms_nodes",
+                                   extra_where="AND truth_value = 'IN'")
+        if idfs:
+            belief_rows = sorted(belief_rows, key=lambda r: _idf_score(r["text"], idfs), reverse=True)
+
+    belief_rows = belief_rows[:limit]
     context = "\n".join(
-        f"[{r.truth_value}] {r.id} — {r.text}" for r in rows
+        f"[{r.get('truth_value', 'IN')}] {r['id']} — {r['text']}" for r in belief_rows
     )
     sources = []
-    for r in rows:
-        # Extract agent namespace from belief ID (e.g. "engineering:belief-name" → "engineering")
-        domain = r.id.split(":")[0] if ":" in r.id else ""
-        if r.source:
-            title = _source_title_from_path(r.source)
+    for r in belief_rows:
+        rid = r["id"]
+        domain = rid.split(":")[0] if ":" in rid else ""
+        source = r.get("source", "")
+        source_url = r.get("source_url", "")
+        if source:
+            title = _source_title_from_path(source)
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
-            slug = r.source
-            url = r.source_url or ""
-            # Generate internal URL for entries without external URLs
-            if not url and "/" in r.source:
-                url = f"/projects/{project_id}/source/{r.source}"
+            slug = source
+            url = source_url or ""
+            if not url and "/" in source:
+                url = f"/projects/{project_id}/source/{source}"
         else:
-            # Derived beliefs without source docs — use belief ID as identifier
-            title = r.id.split(":", 1)[-1].replace("-", " ").title()
+            title = rid.split(":", 1)[-1].replace("-", " ").title()
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
-            slug = r.id
+            slug = rid
             url = ""
         sources.append(SourceRef(
             label=label,
             slug=slug,
             url=url,
             category="Primary",
-            cite_key=r.id,
+            cite_key=rid,
         ))
     return context, sources
 
@@ -385,31 +381,32 @@ MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
     """FTS search over source_chunks with IDF re-ranking.
 
-    Fetches 3x the limit using ts_rank_cd() as baseline, then re-ranks by
-    IDF-weighted term matching so rare/diagnostic terms (e.g. "Renewals")
-    surface over common ones (e.g. "data", "strategy"). Approximates BM25.
+    PostgreSQL: tsvector with ts_rank_cd baseline, IDF re-ranking.
+    SQLite: LIKE-based OR search, no IDF re-ranking.
 
     Returns (context_string, source_refs) where source_refs tracks provenance.
     """
-    or_query = _build_or_tsquery(query)
-    if not or_query:
-        return "", []
     terms = _get_query_terms(query)
+    if not terms:
+        return "", []
     pid = str(project_id)
+    where, order, params = fts_clause("c.text", query)
+    params["pid"] = pid
+    params["lim"] = limit * 3
+    order_clause = f"ORDER BY {order}" if order else ""
     with get_sync_session() as session:
         idfs = _compute_idf(session, pid, terms, "source_chunks")
         rows = session.execute(
             sa_text(
-                "SELECT c.text, c.section, s.slug, s.url "
-                "FROM source_chunks c "
-                "JOIN sources s ON s.id = c.source_id "
-                "WHERE c.project_id = :pid "
-                "AND to_tsvector('english', c.text) @@ to_tsquery('english', :q) "
-                "ORDER BY ts_rank_cd(to_tsvector('english', c.text), "
-                "         to_tsquery('english', :q)) DESC "
-                "LIMIT :lim"
+                f"SELECT c.text, c.section, s.slug, s.url "
+                f"FROM source_chunks c "
+                f"JOIN sources s ON s.id = c.source_id "
+                f"WHERE c.project_id = :pid "
+                f"AND {where} "
+                f"{order_clause} "
+                f"LIMIT :lim"
             ),
-            {"pid": pid, "q": or_query, "lim": limit * 3},
+            params,
         ).all()
     if not rows:
         return "", []

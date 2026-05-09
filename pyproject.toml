@@ -28,6 +28,7 @@ dependencies = [
     "ftl-reasons @ git+https://github.com/benthomasson/ftl-reasons.git@main",
     "authlib>=1.3",
     "itsdangerous>=2.1",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]

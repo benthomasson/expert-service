@@ -16,11 +16,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from expert_service.api import projects, pipeline, data, chat, meta_chat, ask
 from expert_service.auth import router as auth_router, verify_auth, verify_auth_web, _LoginRedirect
 from expert_service.config import settings
-from expert_service.db.connection import get_session
+from expert_service.db.connection import get_session, init_db
 from expert_service.db.models import Assessment, Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
 from expert_service.rbac import UserInfo
 from expert_service.rms import api as rms_api
+
+# Create SQLite tables on startup (no-op for PostgreSQL)
+init_db()
 
 app = FastAPI(title="Expert Service", version="0.1.0")
 
@@ -92,10 +95,7 @@ async def home(request: Request, _user: UserInfo = Depends(verify_auth_web), ses
         entry_count = await session.scalar(
             select(func.count()).select_from(Entry).where(Entry.project_id == p.id)
         )
-        belief_count = await session.scalar(
-            sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid AND truth_value = 'IN'"),
-            {"pid": str(p.id)},
-        )
+        belief_count = await asyncio.to_thread(rms_api.count_beliefs, p.id, "IN")
         projects_with_stats.append({
             "id": p.id,
             "name": p.name,
@@ -165,14 +165,8 @@ async def project_detail(
         "entries": await session.scalar(
             select(func.count()).select_from(Entry).where(Entry.project_id == project_id)
         ) or 0,
-        "beliefs": await session.scalar(
-            sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid AND truth_value = 'IN'"),
-            {"pid": str(project_id)},
-        ) or 0,
-        "nogoods": await session.scalar(
-            sa_text("SELECT count(*) FROM rms_nogoods WHERE project_id = :pid"),
-            {"pid": str(project_id)},
-        ) or 0,
+        "beliefs": await asyncio.to_thread(rms_api.count_beliefs, project_id, "IN"),
+        "nogoods": await asyncio.to_thread(rms_api.count_nogoods, project_id),
         "assessments": await session.scalar(
             select(func.count()).select_from(Assessment).where(Assessment.project_id == project_id)
         ) or 0,

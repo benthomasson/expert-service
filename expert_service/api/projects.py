@@ -1,5 +1,6 @@
 """Project CRUD API routes."""
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,10 +9,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expert_service.db.connection import get_session
-from sqlalchemy import text as sa_text
-
 from expert_service.db.models import Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
+from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -55,11 +55,8 @@ async def _project_counts(session: AsyncSession, project_id):
     """Get source, entry, and belief counts for a project."""
     src = await session.execute(select(func.count()).where(Source.project_id == project_id))
     ent = await session.execute(select(func.count()).where(Entry.project_id == project_id))
-    blf = await session.execute(
-        sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid"),
-        {"pid": str(project_id)},
-    )
-    return src.scalar() or 0, ent.scalar() or 0, blf.scalar() or 0
+    blf = await asyncio.to_thread(rms_api.count_beliefs, project_id, None)
+    return src.scalar() or 0, ent.scalar() or 0, blf
 
 
 @router.get("")
