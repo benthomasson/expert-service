@@ -170,7 +170,7 @@ async def search(
     q: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_session),
 ):
-    """Full-text search across entries and claims."""
+    """Full-text search across entries, claims, and source chunks."""
     ts_query = func.plainto_tsquery("english", q)
 
     # Search entries
@@ -195,9 +195,26 @@ async def search(
         {"pid": str(project_id), "q": q},
     )
 
+    # Search source chunks
+    chunk_results = await session.execute(
+        text(
+            "SELECT c.id, c.section, s.slug AS source_slug, s.url AS source_url, "
+            "  left(c.text, 500) AS snippet "
+            "FROM source_chunks c "
+            "JOIN sources s ON s.id = c.source_id "
+            "WHERE c.project_id = :pid "
+            "AND to_tsvector('english', c.text) @@ plainto_tsquery('english', :q) "
+            "ORDER BY ts_rank_cd(to_tsvector('english', c.text), "
+            "         plainto_tsquery('english', :q)) DESC "
+            "LIMIT 20"
+        ),
+        {"pid": str(project_id), "q": q},
+    )
+
     return {
         "entries": [dict(r._mapping) for r in entry_results.all()],
         "beliefs": [dict(r._mapping) for r in belief_results.all()],
+        "sources": [dict(r._mapping) for r in chunk_results.all()],
     }
 
 
