@@ -1,6 +1,7 @@
 """Data access API routes — sources, entries, claims, search."""
 
 import asyncio
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -170,18 +171,27 @@ async def search(
     q: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_session),
 ):
-    """Full-text search across entries, claims, and source chunks."""
-    ts_query = func.plainto_tsquery("english", q)
+    """Full-text search across entries, claims, and source chunks.
+
+    Uses OR-based tsquery with ts_rank_cd ranking so broad questions
+    match documents containing any of the query terms, not just all.
+    """
+    # Build OR-based tsquery from query terms (skip stop words)
+    terms = [w.lower() for w in re.findall(r'\w+', q) if len(w) > 1]
+    or_query = " | ".join(terms) if terms else q
 
     # Search entries
     entry_results = await session.execute(
-        select(Entry.id, Entry.title, Entry.topic)
-        .where(
-            Entry.project_id == project_id,
-            text("to_tsvector('english', coalesce(title, '') || ' ' || content) @@ plainto_tsquery('english', :q)"),
-        )
-        .params(q=q)
-        .limit(20)
+        text(
+            "SELECT id, title, topic FROM entries "
+            "WHERE project_id = :pid "
+            "AND to_tsvector('english', coalesce(title, '') || ' ' || content) "
+            "    @@ to_tsquery('english', :q) "
+            "ORDER BY ts_rank_cd(to_tsvector('english', coalesce(title, '') || ' ' || content), "
+            "         to_tsquery('english', :q)) DESC "
+            "LIMIT 20"
+        ),
+        {"pid": str(project_id), "q": or_query},
     )
 
     # Search RMS beliefs
@@ -189,10 +199,12 @@ async def search(
         text(
             "SELECT id, text, truth_value FROM rms_nodes "
             "WHERE project_id = :pid AND truth_value = 'IN' "
-            "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
+            "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
+            "ORDER BY ts_rank_cd(to_tsvector('english', text), "
+            "         to_tsquery('english', :q)) DESC "
             "LIMIT 20"
         ),
-        {"pid": str(project_id), "q": q},
+        {"pid": str(project_id), "q": or_query},
     )
 
     # Search source chunks
@@ -203,12 +215,12 @@ async def search(
             "FROM source_chunks c "
             "JOIN sources s ON s.id = c.source_id "
             "WHERE c.project_id = :pid "
-            "AND to_tsvector('english', c.text) @@ plainto_tsquery('english', :q) "
+            "AND to_tsvector('english', c.text) @@ to_tsquery('english', :q) "
             "ORDER BY ts_rank_cd(to_tsvector('english', c.text), "
-            "         plainto_tsquery('english', :q)) DESC "
+            "         to_tsquery('english', :q)) DESC "
             "LIMIT 20"
         ),
-        {"pid": str(project_id), "q": q},
+        {"pid": str(project_id), "q": or_query},
     )
 
     return {

@@ -127,7 +127,14 @@ def _extract_cited_keys(text: str) -> set[str]:
         # Skip pure numbers, truth values, and common markdown patterns
         if re.match(r'^(\d+|IN|OUT|\.\.\.truncated)$', key):
             continue
-        keys.add(key)
+        # Handle comma-separated keys like [belief-a, belief-b]
+        if ", " in key:
+            for part in key.split(", "):
+                part = part.strip()
+                if part and not re.match(r'^(\d+|IN|OUT)$', part):
+                    keys.add(part)
+        else:
+            keys.add(key)
     return keys
 
 
@@ -162,17 +169,15 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
             seen.add(s.slug)
             unique.append(s)
 
-    # Data sources always included; Primary before Supporting for the rest
+    # Separate derived beliefs (no source doc) from sourced references
+    # Do this BEFORE the cap so beliefs aren't truncated by MAX_SOURCES
     data = [s for s in unique if s.category == "Data"]
-    rest = [s for s in unique if s.category != "Data"]
+    beliefs = [s for s in unique if s.category == "Primary" and not s.url and "/" not in s.slug]
+    rest = [s for s in unique if s not in data and s not in beliefs]
     order = {"Primary": 0, "Supporting": 1}
     rest.sort(key=lambda s: order.get(s.category, 9))
     rest = rest[:MAX_SOURCES - len(data)]
-    unique = data + rest
-
-    # Separate derived beliefs (no source doc) from sourced references
-    beliefs = [s for s in unique if s.category == "Primary" and not s.url and "/" not in s.slug]
-    sourced = [s for s in unique if s not in beliefs]
+    sourced = data + rest
 
     # Build cite_key → number mapping for inline replacement
     cite_map: dict[str, int] = {}
@@ -555,7 +560,9 @@ independently using a different retrieval method:
 Produce a single merged answer that:
 - Combines information from both answers
 - When both answers cover the same point, use the more specific/detailed version
-- Preserve all citations (belief IDs in [brackets] from Answer A, [filenames] from Answer B)
+- Preserve ALL citations from both answers in [brackets] — belief IDs like [belief-name] from Answer A, source slugs like [cluster/filename] from Answer B
+- Every claim that came from a belief MUST retain its [belief-id] citation in the merged answer
+- Every claim that came from a source document MUST retain its [source-slug] citation
 - Do not add information that neither answer contains
 - If the answers contradict each other, note the disagreement
 
@@ -597,7 +604,8 @@ async def _tms_answer_iterative(
     When data connectors are available (via allowed_connectors), the LLM can
     also call query_data to fetch live data alongside belief searches.
 
-    Returns (answer_text, data_sources) where data_sources tracks connector queries.
+    Returns (answer_text, extra_sources) where extra_sources includes both
+    connector queries and beliefs discovered during iterative searches.
     """
     beliefs_ctx = initial_beliefs
     if not beliefs_ctx:
@@ -607,7 +615,7 @@ async def _tms_answer_iterative(
     logger.info("TMS iterative: connectors=%r, tools_section=%d chars",
                 allowed_connectors, len(connector_tools))
     tool_history: list[dict] = []
-    data_sources: list[SourceRef] = []
+    extra_sources: list[SourceRef] = []
 
     for iteration in range(MAX_TMS_ITERATIONS):
         history_section = ""
@@ -633,18 +641,19 @@ async def _tms_answer_iterative(
 
         tool_call = _extract_tool_call(response_text)
         if tool_call is None:
-            return response_text, data_sources
+            return response_text, extra_sources
 
         if tool_call.get("tool") == "search_beliefs":
             query = tool_call.get("query", "")
             logger.info("TMS iterative search round %d: %r", iteration + 1, query)
-            extra_ctx, _extra_sources = await asyncio.to_thread(
+            extra_ctx, iter_sources = await asyncio.to_thread(
                 _quick_belief_search, project_id, query, 20,
             )
             tool_history.append({"tool": "search_beliefs", "query": query,
                                  "result": extra_ctx or "No results found."})
             if extra_ctx:
                 beliefs_ctx = extra_ctx
+                extra_sources.extend(iter_sources)
         elif tool_call.get("tool") == "query_data":
             q = tool_call.get("question", "")
             connector = tool_call.get("connector")
@@ -655,16 +664,16 @@ async def _tms_answer_iterative(
             tool_history.append({"tool": f"query_data({connector or 'all'})",
                                  "query": q, "result": result})
             connector_label = (connector or "data").title()
-            data_sources.append(SourceRef(
+            extra_sources.append(SourceRef(
                 label=f"{connector_label} Query: {q}",
                 slug=f"{connector_label} - Direct Query",
                 url="",
                 category="Data",
             ))
         else:
-            return response_text, data_sources
+            return response_text, extra_sources
 
-    return response_text, data_sources
+    return response_text, extra_sources
 
 
 async def dual_ask(
