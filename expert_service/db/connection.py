@@ -14,6 +14,14 @@ if _is_sqlite:
         echo=False,
         connect_args={"check_same_thread": False},
     )
+
+    # Enable WAL and foreign keys on every async SQLite connection
+    @event.listens_for(engine.sync_engine, "connect")
+    def _async_sqlite_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 else:
     engine = create_async_engine(settings.database_url, echo=False)
 

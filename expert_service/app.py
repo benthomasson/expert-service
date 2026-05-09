@@ -22,10 +22,13 @@ from expert_service.chat.meta_agent import invalidate_meta_cache
 from expert_service.rbac import UserInfo
 from expert_service.rms import api as rms_api
 
-# Create SQLite tables on startup (no-op for PostgreSQL)
-init_db()
-
 app = FastAPI(title="Expert Service", version="0.1.0")
+
+
+@app.on_event("startup")
+def _init_sqlite():
+    """Create SQLite tables on startup (no-op for PostgreSQL)."""
+    init_db()
 
 # Session middleware for OAuth cookie sessions
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)

@@ -224,11 +224,23 @@ def what_if_assert(project_id: UUID, node_id: str) -> dict:
 def count_beliefs(project_id: UUID, status: str | None = "IN") -> int:
     """Count beliefs, optionally filtered by truth_value."""
     if _is_sqlite():
-        import reasons_lib.api as rlib
-        result = rlib.get_status(db_path=_db_path(project_id))
-        if status:
-            return sum(1 for n in result.get("nodes", []) if n.get("truth_value") == status)
-        return len(result.get("nodes", []))
+        import sqlite3
+        db = _db_path(project_id)
+        if not Path(db).exists():
+            return 0
+        conn = sqlite3.connect(db)
+        try:
+            if status:
+                count = conn.execute(
+                    "SELECT count(*) FROM nodes WHERE truth_value = ?", (status,)
+                ).fetchone()[0]
+            else:
+                count = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+        except sqlite3.OperationalError:
+            count = 0
+        finally:
+            conn.close()
+        return count
     from expert_service.db.connection import get_sync_session
     from sqlalchemy import text
     with get_sync_session() as session:
@@ -246,9 +258,18 @@ def count_beliefs(project_id: UUID, status: str | None = "IN") -> int:
 def count_nogoods(project_id: UUID) -> int:
     """Count nogood records for a project."""
     if _is_sqlite():
-        import reasons_lib.api as rlib
-        result = rlib.get_status(db_path=_db_path(project_id))
-        return len(result.get("nogoods", []))
+        import sqlite3
+        db = _db_path(project_id)
+        if not Path(db).exists():
+            return 0
+        conn = sqlite3.connect(db)
+        try:
+            count = conn.execute("SELECT count(*) FROM nogoods").fetchone()[0]
+        except sqlite3.OperationalError:
+            count = 0
+        finally:
+            conn.close()
+        return count
     from expert_service.db.connection import get_sync_session
     from sqlalchemy import text
     with get_sync_session() as session:

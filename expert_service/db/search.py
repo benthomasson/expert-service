@@ -8,6 +8,20 @@ import re
 
 from expert_service.config import settings
 
+# Allowlist of column expressions that may be interpolated into SQL.
+# All callers must use one of these — prevents SQL injection via text_expr.
+_ALLOWED_TEXT_EXPRS = frozenset({
+    "text",
+    "c.text",
+    "coalesce(title, '') || ' ' || content",
+})
+
+
+def _validate_text_expr(text_expr: str) -> None:
+    if text_expr not in _ALLOWED_TEXT_EXPRS:
+        raise ValueError(f"Disallowed text_expr: {text_expr!r}")
+
+
 # Stop words to exclude from search queries
 _STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -40,6 +54,7 @@ def fts_clause(text_expr: str, question: str) -> tuple[str, str, dict]:
     PostgreSQL: to_tsvector @@ to_tsquery with ts_rank_cd ranking.
     SQLite: multi-term LIKE OR conditions, no ranking.
     """
+    _validate_text_expr(text_expr)
     terms = _get_terms(question)
     if not terms:
         return "1=0", "", {}
@@ -69,6 +84,7 @@ def plainto_fts_clause(text_expr: str, question: str) -> tuple[str, str, dict]:
 
     Returns (where_sql, order_sql, params).
     """
+    _validate_text_expr(text_expr)
     if settings.db_backend == "postgresql":
         where = (
             f"to_tsvector('english', {text_expr}) "
@@ -77,5 +93,12 @@ def plainto_fts_clause(text_expr: str, question: str) -> tuple[str, str, dict]:
         order = ""
         return where, order, {"q": question}
     else:
-        # SQLite: single LIKE pattern
-        return f"lower({text_expr}) LIKE :q", "", {"q": f"%{question.lower()}%"}
+        # SQLite: AND of per-term LIKE conditions (matches plainto_tsquery semantics)
+        terms = _get_terms(question)
+        if not terms:
+            return "1=0", "", {}
+        conditions = " AND ".join(
+            f"lower({text_expr}) LIKE :q{i}" for i in range(len(terms))
+        )
+        params = {f"q{i}": f"%{term}%" for i, term in enumerate(terms)}
+        return f"({conditions})", "", params
