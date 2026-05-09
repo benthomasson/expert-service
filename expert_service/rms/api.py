@@ -219,6 +219,50 @@ def what_if_assert(project_id: UUID, node_id: str) -> dict:
         return api.what_if_assert(node_id)
 
 
+def import_network(project_id: UUID, network) -> dict:
+    """Import a reasons_lib Network into a project.
+
+    SQLite: saves directly via reasons_lib.Storage.
+    PostgreSQL: inserts nodes, justifications, and nogoods via PgApi.
+
+    Returns dict with node_count and nogood_count.
+    """
+    node_count = len(network.nodes)
+    nogood_count = len(network.nogoods)
+
+    if _is_sqlite():
+        from reasons_lib.storage import Storage
+        db = _db_path(project_id)
+        store = Storage(db)
+        store.save(network)
+        store.close()
+    else:
+        with _api(project_id) as api:
+            for node in network.nodes.values():
+                api.add_node(
+                    node.id, node.text,
+                    source=node.source or "",
+                )
+                if node.truth_value == "OUT":
+                    api.retract_node(node.id)
+
+                # Add non-trivial justifications (SL with antecedents)
+                for j in node.justifications:
+                    if j.type == "SL" and not j.antecedents and not j.outlist:
+                        continue  # skip bare SL created by add_node
+                    api.add_node(
+                        node.id, node.text,
+                        sl=",".join(j.antecedents) if j.type == "SL" else "",
+                        unless=",".join(j.outlist) if j.outlist else "",
+                        label=j.label or "",
+                    )
+
+            for nogood in network.nogoods:
+                api.add_nogood(nogood.nodes)
+
+    return {"node_count": node_count, "nogood_count": nogood_count}
+
+
 # --- Belief/nogood count helpers (avoids direct rms_nodes SQL) ---
 
 def count_beliefs(project_id: UUID, status: str | None = "IN") -> int:
@@ -282,14 +326,39 @@ def count_nogoods(project_id: UUID) -> int:
 def search_beliefs_fts(project_id: UUID, query: str, limit: int = 10) -> list[dict]:
     """Search IN beliefs by text. Returns list of dicts with id, text, truth_value, source, source_url."""
     if _is_sqlite():
-        result = search(project_id, query)
-        rows = result.get("results", [])[:limit]
-        # Ensure all fields present
-        for r in rows:
-            r.setdefault("source", "")
-            r.setdefault("source_url", "")
-            r.setdefault("truth_value", "IN")
-        return rows
+        import sqlite3
+        db = _db_path(project_id)
+        if not Path(db).exists():
+            return []
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        try:
+            # Try FTS5 first, fall back to LIKE
+            try:
+                rows = conn.execute(
+                    "SELECT n.id, n.text, n.truth_value, n.source "
+                    "FROM nodes n "
+                    "JOIN nodes_fts f ON f.id = n.id "
+                    "WHERE nodes_fts MATCH ? AND n.truth_value = 'IN' "
+                    "LIMIT ?",
+                    (query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(
+                    "SELECT id, text, truth_value, source FROM nodes "
+                    "WHERE truth_value = 'IN' AND lower(text) LIKE ? "
+                    "LIMIT ?",
+                    (f"%{query.lower()}%", limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+        return [
+            {"id": r["id"], "text": r["text"], "truth_value": r["truth_value"],
+             "source": r["source"] or "", "source_url": ""}
+            for r in rows
+        ]
     # PostgreSQL: use existing tsvector search
     from expert_service.db.connection import get_sync_session
     from expert_service.db.search import fts_clause

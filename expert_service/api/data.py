@@ -1,7 +1,6 @@
 """Data access API routes — sources, entries, claims, search."""
 
 import asyncio
-import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query

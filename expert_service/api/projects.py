@@ -1,7 +1,6 @@
 """Project CRUD API routes."""
 
 import asyncio
-import shutil
 import tempfile
 from pathlib import Path
 from uuid import UUID
@@ -11,7 +10,6 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
@@ -123,12 +121,9 @@ async def import_reasons(
 ):
     """Import a reasons.db file to create a new project with beliefs.
 
-    Creates the project, then:
-    - SQLite mode: copies the file directly to data/{project_id}/reasons.db
-    - PostgreSQL mode: reads nodes/justifications/nogoods from the uploaded
-      SQLite file and inserts them via PgApi
+    Creates the project, then imports the network via rms_api.import_network.
     """
-    # Validate the uploaded file by saving to a temp location and opening it
+    # Save upload to temp file for validation and import
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         tmp_path = Path(tmp.name)
         content = await file.read()
@@ -139,64 +134,29 @@ async def import_reasons(
         from reasons_lib.storage import Storage
         store = Storage(str(tmp_path))
         network = store.load()
-        node_count = len(network.nodes)
-        nogood_count = len(network.nogoods)
         store.close()
+
+        # Create the project
+        project = Project(name=name, domain=domain)
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        # Import via public API
+        result = await asyncio.to_thread(
+            rms_api.import_network, project.id, network
+        )
+        invalidate_meta_cache()
+
+        return {
+            "project_id": str(project.id),
+            "name": project.name,
+            "beliefs": result["node_count"],
+            "nogoods": result["nogood_count"],
+        }
     except Exception as e:
-        tmp_path.unlink(missing_ok=True)
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(status_code=400, detail=f"Invalid reasons.db: {e}")
-
-    # Create the project
-    project = Project(name=name, domain=domain)
-    session.add(project)
-    await session.commit()
-    await session.refresh(project)
-
-    # Import beliefs
-    if settings.db_backend == "sqlite":
-        # Direct file copy
-        dest = settings.data_dir / str(project.id) / "reasons.db"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(tmp_path), str(dest))
-    else:
-        # PostgreSQL: read from SQLite and insert via PgApi
-        def _pg_import():
-            store = Storage(str(tmp_path))
-            net = store.load()
-            store.close()
-            with rms_api._api(project.id) as api:
-                for node in net.nodes.values():
-                    api.add_node(
-                        node.id, node.text,
-                        source=node.source or "",
-                        source_url=node.source_url or "",
-                    )
-                    if node.truth_value == "OUT":
-                        api.retract_node(node.id)
-
-                for justification in net.justifications:
-                    # Skip SL justifications already created by add_node
-                    if justification.type == "SL" and not justification.antecedents:
-                        continue
-                    api.add_node(
-                        justification.node_id,
-                        net.nodes[justification.node_id].text,
-                        sl=",".join(justification.antecedents) if justification.type == "SL" else "",
-                        unless=",".join(justification.outlist) if justification.outlist else "",
-                        label=justification.label or "",
-                    )
-
-                for nogood in net.nogoods:
-                    api.add_nogood(nogood.nodes)
-
-        await asyncio.to_thread(_pg_import)
-
-    tmp_path.unlink(missing_ok=True)
-    invalidate_meta_cache()
-
-    return {
-        "project_id": str(project.id),
-        "name": project.name,
-        "beliefs": node_count,
-        "nogoods": nogood_count,
-    }
+    finally:
+        tmp_path.unlink(missing_ok=True)
