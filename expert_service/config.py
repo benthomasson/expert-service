@@ -1,7 +1,9 @@
 """Application configuration."""
 
 import os
-from pydantic import BaseModel
+from pathlib import Path
+
+from pydantic import BaseModel, model_validator
 
 
 class Settings(BaseModel):
@@ -14,6 +16,36 @@ class Settings(BaseModel):
         "DATABASE_URL_SYNC",
         "postgresql+psycopg://expert:expert_dev@localhost:5432/expert_service",
     )
+
+    @model_validator(mode="after")
+    def _derive_sqlite_sync_url(self):
+        """Auto-derive sync URL when using SQLite."""
+        if self.db_backend == "sqlite" and "psycopg" in self.database_url_sync:
+            # User set DATABASE_URL to sqlite but left sync at postgres default
+            self.database_url_sync = self.database_url.replace(
+                "sqlite+aiosqlite://", "sqlite://"
+            )
+        return self
+
+    @property
+    def db_backend(self) -> str:
+        """'sqlite' or 'postgresql' based on DATABASE_URL."""
+        if self.database_url.startswith("sqlite"):
+            return "sqlite"
+        return "postgresql"
+
+    @property
+    def data_dir(self) -> Path:
+        """Directory for SQLite data files. Extracted from the database URL path."""
+        if self.db_backend != "sqlite":
+            return Path("data")
+        # sqlite+aiosqlite:///data/expert.db → data/
+        url = self.database_url
+        for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
+            if url.startswith(prefix):
+                url = url[len(prefix):]
+                break
+        return Path(url).parent
     # Vertex AI configuration (shared with agents-python)
     google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
     google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")

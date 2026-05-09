@@ -6,10 +6,18 @@ from uuid import UUID
 from langchain_core.tools import tool
 from sqlalchemy import select, text
 
+from expert_service.config import settings
 from expert_service.db.connection import get_sync_session
-from expert_service.db.models import Embedding, Entry, Source, entry_sources
-from expert_service.embeddings import embed_query
+from expert_service.db.models import Entry, Source, entry_sources
+from expert_service.db.search import plainto_fts_clause
 from expert_service.rms import api as rms_api
+
+try:
+    from expert_service.db.models import Embedding
+    from expert_service.embeddings import embed_query
+    _has_pgvector = Embedding is not None
+except ImportError:
+    _has_pgvector = False
 
 
 def _extract_match_context(content: str, pattern: str, context_chars: int = 200) -> str:
@@ -36,30 +44,21 @@ def make_tools(project_id: UUID) -> list:
     def search_knowledge(query: str) -> str:
         """Search entries and beliefs by keyword. Returns matching entries with content snippets and matching beliefs with full text. Use read_entry to get full content of a specific entry."""
         with get_sync_session() as session:
-            # Search entries via FTS — include content snippet
+            # Search entries via FTS
+            where, _order, params = plainto_fts_clause(
+                "coalesce(title, '') || ' ' || content", query
+            )
             entry_rows = session.execute(
-                select(Entry.id, Entry.title, Entry.topic, Entry.content)
-                .where(
-                    Entry.project_id == project_id,
-                    text(
-                        "to_tsvector('english', coalesce(title, '') || ' ' || content) "
-                        "@@ plainto_tsquery('english', :q)"
-                    ),
-                )
-                .params(q=query)
-                .limit(5)
+                text(
+                    f"SELECT id, title, topic, content FROM entries "
+                    f"WHERE project_id = :pid AND {where} "
+                    f"LIMIT 5"
+                ),
+                {"pid": str(project_id), **params},
             ).all()
 
-            # Search RMS beliefs via FTS
-            belief_rows = session.execute(
-                text(
-                    "SELECT id, text, truth_value FROM rms_nodes "
-                    "WHERE project_id = :pid AND truth_value = 'IN' "
-                    "AND to_tsvector('english', text) @@ plainto_tsquery('english', :q) "
-                    "LIMIT 10"
-                ),
-                {"pid": str(project_id), "q": query},
-            ).all()
+        # Search RMS beliefs (backend-dispatched)
+        belief_hits = rms_api.search_beliefs_fts(project_id, query, 10)
 
         results = {
             "entries": [
@@ -71,7 +70,8 @@ def make_tools(project_id: UUID) -> list:
                 for r in entry_rows
             ],
             "beliefs": [
-                {"id": r.id, "text": r.text, "truth_value": r.truth_value} for r in belief_rows
+                {"id": b["id"], "text": b["text"], "truth_value": b.get("truth_value", "IN")}
+                for b in belief_hits
             ],
         }
         if not results["entries"] and not results["beliefs"]:
@@ -218,14 +218,12 @@ def make_tools(project_id: UUID) -> list:
                 .limit(5)
             ).all()
 
-            # Search RMS beliefs
-            belief_rows = session.execute(
-                text(
-                    "SELECT id, text, truth_value FROM rms_nodes "
-                    "WHERE project_id = :pid AND truth_value = 'IN' AND text ILIKE :pat LIMIT 10"
-                ),
-                {"pid": str(project_id), "pat": like_pattern},
-            ).all()
+            # Search RMS beliefs (via rms_api for SQLite compatibility)
+            belief_rows = []
+            belief_search = rms_api.search(project_id, pattern)
+            for b in belief_search.get("results", [])[:10]:
+                if pattern.lower() in b.get("text", "").lower():
+                    belief_rows.append(b)
 
         results = {
             "entries": [
@@ -245,8 +243,9 @@ def make_tools(project_id: UUID) -> list:
                 for r in source_rows
             ],
             "beliefs": [
-                {"id": r.id, "text": r.text, "truth_value": r.truth_value}
-                for r in belief_rows
+                {"id": b.get("id", b.get("node_id", "")), "text": b["text"],
+                 "truth_value": b.get("truth_value", "IN")}
+                for b in belief_rows
             ],
         }
         total = len(results["entries"]) + len(results["sources"]) + len(results["beliefs"])
@@ -254,36 +253,37 @@ def make_tools(project_id: UUID) -> list:
             return f"No exact matches for '{pattern}'."
         return json.dumps(results, indent=2)
 
-    @tool
-    def semantic_search(query: str) -> str:
-        """Find conceptually related content using semantic similarity. Use this when search_knowledge returns no results, or when the question uses different phrasing than the source text."""
-        query_vec = embed_query(query)
-        with get_sync_session() as session:
-            rows = session.execute(
-                text(
-                    "SELECT source_table, source_id, label, "
-                    "1 - (embedding <=> CAST(:qvec AS vector)) AS similarity "
-                    "FROM embeddings "
-                    "WHERE project_id = :pid "
-                    "ORDER BY embedding <=> CAST(:qvec AS vector) "
-                    "LIMIT 8"
-                ),
-                {"qvec": str(query_vec), "pid": str(project_id)},
-            ).all()
+    if _has_pgvector and settings.db_backend == "postgresql":
+        @tool
+        def semantic_search(query: str) -> str:
+            """Find conceptually related content using semantic similarity. Use this when search_knowledge returns no results, or when the question uses different phrasing than the source text."""
+            query_vec = embed_query(query)
+            with get_sync_session() as session:
+                rows = session.execute(
+                    text(
+                        "SELECT source_table, source_id, label, "
+                        "1 - (embedding <=> CAST(:qvec AS vector)) AS similarity "
+                        "FROM embeddings "
+                        "WHERE project_id = :pid "
+                        "ORDER BY embedding <=> CAST(:qvec AS vector) "
+                        "LIMIT 8"
+                    ),
+                    {"qvec": str(query_vec), "pid": str(project_id)},
+                ).all()
 
-        results = [
-            {
-                "type": r.source_table,
-                "id": r.source_id,
-                "label": r.label,
-                "similarity": round(r.similarity, 3),
-            }
-            for r in rows
-            if r.similarity >= 0.3
-        ]
-        if not results:
-            return f"No semantically similar content found for '{query}'."
-        return json.dumps(results, indent=2)
+            results = [
+                {
+                    "type": r.source_table,
+                    "id": r.source_id,
+                    "label": r.label,
+                    "similarity": round(r.similarity, 3),
+                }
+                for r in rows
+                if r.similarity >= 0.3
+            ]
+            if not results:
+                return f"No semantically similar content found for '{query}'."
+            return json.dumps(results, indent=2)
 
     # --- RMS tools (Reason Maintenance System) ---
 
@@ -444,10 +444,13 @@ def make_tools(project_id: UUID) -> list:
         parts.append(f"Total affected: {result['total_affected']}")
         return "\n".join(parts)
 
-    return [
+    tools = [
         search_knowledge, read_entry, list_entries, list_beliefs,
-        read_source, list_source_entries, grep_content, semantic_search,
+        read_source, list_source_entries, grep_content,
         rms_status, rms_add, rms_retract, rms_assert, rms_explain,
         rms_show, rms_search, rms_trace, rms_challenge, rms_defend,
         rms_nogood, rms_compact, rms_find_issues, rms_what_if,
     ]
+    if _has_pgvector and settings.db_backend == "postgresql":
+        tools.insert(7, semantic_search)  # after grep_content
+    return tools

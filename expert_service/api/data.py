@@ -1,7 +1,6 @@
 """Data access API routes — sources, entries, claims, search."""
 
 import asyncio
-import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -11,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from expert_service.chunking import chunk_markdown
+from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import Entry, Source, entry_sources
+from expert_service.db.search import fts_clause
 from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["data"])
@@ -171,61 +172,49 @@ async def search(
     q: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_session),
 ):
-    """Full-text search across entries, claims, and source chunks.
+    """Full-text search across entries, beliefs, and source chunks.
 
-    Uses OR-based tsquery with ts_rank_cd ranking so broad questions
-    match documents containing any of the query terms, not just all.
+    Uses OR-based tsquery with ts_rank_cd ranking on PostgreSQL,
+    LIKE-based OR search on SQLite.
     """
-    # Build OR-based tsquery from query terms (skip stop words)
-    terms = [w.lower() for w in re.findall(r'\w+', q) if len(w) > 1]
-    or_query = " | ".join(terms) if terms else q
-
     # Search entries
+    entry_text = "coalesce(title, '') || ' ' || content"
+    ew, eo, ep = fts_clause(entry_text, q)
+    ep["pid"] = str(project_id)
+    order_clause = f"ORDER BY {eo}" if eo else ""
     entry_results = await session.execute(
         text(
-            "SELECT id, title, topic FROM entries "
-            "WHERE project_id = :pid "
-            "AND to_tsvector('english', coalesce(title, '') || ' ' || content) "
-            "    @@ to_tsquery('english', :q) "
-            "ORDER BY ts_rank_cd(to_tsvector('english', coalesce(title, '') || ' ' || content), "
-            "         to_tsquery('english', :q)) DESC "
-            "LIMIT 20"
+            f"SELECT id, title, topic FROM entries "
+            f"WHERE project_id = :pid AND {ew} "
+            f"{order_clause} LIMIT 20"
         ),
-        {"pid": str(project_id), "q": or_query},
+        ep,
     )
 
-    # Search RMS beliefs
-    belief_results = await session.execute(
-        text(
-            "SELECT id, text, truth_value FROM rms_nodes "
-            "WHERE project_id = :pid AND truth_value = 'IN' "
-            "AND to_tsvector('english', text) @@ to_tsquery('english', :q) "
-            "ORDER BY ts_rank_cd(to_tsvector('english', text), "
-            "         to_tsquery('english', :q)) DESC "
-            "LIMIT 20"
-        ),
-        {"pid": str(project_id), "q": or_query},
-    )
+    # Search RMS beliefs (routed through rms_api for SQLite compatibility)
+    belief_rows = await asyncio.to_thread(rms_api.search_beliefs_fts, project_id, q, 20)
 
     # Search source chunks
+    cw, co, cp = fts_clause("c.text", q)
+    cp["pid"] = str(project_id)
+    chunk_order = f"ORDER BY {co}" if co else ""
+    # Use substr() instead of left() for SQLite compatibility
+    snippet_expr = "substr(c.text, 1, 500)" if settings.db_backend == "sqlite" else "left(c.text, 500)"
     chunk_results = await session.execute(
         text(
-            "SELECT c.id, c.section, s.slug AS source_slug, s.url AS source_url, "
-            "  left(c.text, 500) AS snippet "
-            "FROM source_chunks c "
-            "JOIN sources s ON s.id = c.source_id "
-            "WHERE c.project_id = :pid "
-            "AND to_tsvector('english', c.text) @@ to_tsquery('english', :q) "
-            "ORDER BY ts_rank_cd(to_tsvector('english', c.text), "
-            "         to_tsquery('english', :q)) DESC "
-            "LIMIT 20"
+            f"SELECT c.id, c.section, s.slug AS source_slug, s.url AS source_url, "
+            f"  {snippet_expr} AS snippet "
+            f"FROM source_chunks c "
+            f"JOIN sources s ON s.id = c.source_id "
+            f"WHERE c.project_id = :pid AND {cw} "
+            f"{chunk_order} LIMIT 20"
         ),
-        {"pid": str(project_id), "q": or_query},
+        cp,
     )
 
     return {
         "entries": [dict(r._mapping) for r in entry_results.all()],
-        "beliefs": [dict(r._mapping) for r in belief_results.all()],
+        "beliefs": [{"id": b["id"], "text": b["text"], "truth_value": b.get("truth_value", "IN")} for b in belief_rows],
         "sources": [dict(r._mapping) for r in chunk_results.all()],
     }
 

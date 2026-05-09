@@ -1,17 +1,19 @@
 """Project CRUD API routes."""
 
+import asyncio
+import tempfile
+from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from expert_service.db.connection import get_session
-from sqlalchemy import text as sa_text
-
 from expert_service.db.models import Entry, Project, Source
 from expert_service.chat.meta_agent import invalidate_meta_cache
+from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -55,11 +57,8 @@ async def _project_counts(session: AsyncSession, project_id):
     """Get source, entry, and belief counts for a project."""
     src = await session.execute(select(func.count()).where(Source.project_id == project_id))
     ent = await session.execute(select(func.count()).where(Entry.project_id == project_id))
-    blf = await session.execute(
-        sa_text("SELECT count(*) FROM rms_nodes WHERE project_id = :pid"),
-        {"pid": str(project_id)},
-    )
-    return src.scalar() or 0, ent.scalar() or 0, blf.scalar() or 0
+    blf = await asyncio.to_thread(rms_api.count_beliefs, project_id, None)
+    return src.scalar() or 0, ent.scalar() or 0, blf
 
 
 @router.get("")
@@ -111,3 +110,53 @@ async def delete_project(project_id: UUID, session: AsyncSession = Depends(get_s
     await session.commit()
     invalidate_meta_cache()
     return {"status": "deleted"}
+
+
+@router.post("/import-reasons")
+async def import_reasons(
+    name: str = Form(...),
+    domain: str = Form(""),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Import a reasons.db file to create a new project with beliefs.
+
+    Creates the project, then imports the network via rms_api.import_network.
+    """
+    # Save upload to temp file for validation and import
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        content = await file.read()
+        tmp.write(content)
+
+    try:
+        # Verify it's a valid reasons_lib database
+        from reasons_lib.storage import Storage
+        store = Storage(str(tmp_path))
+        network = store.load()
+        store.close()
+
+        # Create the project
+        project = Project(name=name, domain=domain)
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        # Import via public API
+        result = await asyncio.to_thread(
+            rms_api.import_network, project.id, network
+        )
+        invalidate_meta_cache()
+
+        return {
+            "project_id": str(project.id),
+            "name": project.name,
+            "beliefs": result["node_count"],
+            "nogoods": result["nogood_count"],
+        }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail=f"Invalid reasons.db: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)

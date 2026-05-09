@@ -1,5 +1,7 @@
 """Chat API endpoint with SSE streaming."""
 
+import json
+
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter
@@ -14,14 +16,20 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
 
 
 def _get_project_connectors(project_id: UUID) -> list[str] | None:
-    """Read the project's connector whitelist from config JSONB."""
+    """Read the project's connector whitelist from config."""
     with get_sync_session() as session:
         row = session.execute(
             sa_text("SELECT config FROM projects WHERE id = :pid"),
             {"pid": str(project_id)},
         ).first()
-    if row and row.config and isinstance(row.config, dict):
-        connectors = row.config.get("connectors")
+    if not row or not row.config:
+        return None
+    config = row.config
+    # SQLite returns JSON as string; PostgreSQL returns dict
+    if isinstance(config, str):
+        config = json.loads(config)
+    if isinstance(config, dict):
+        connectors = config.get("connectors")
         if isinstance(connectors, list) and connectors:
             return connectors
     return None
