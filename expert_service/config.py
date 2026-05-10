@@ -62,5 +62,13 @@ class Settings(BaseModel):
     secret_key: str = os.getenv("SECRET_KEY", "dev-insecure-key")
     api_key: str = os.getenv("EXPERT_SERVICE_API_KEY", "")
 
+    @property
+    def llm_enabled(self) -> bool:
+        """Whether LLM-powered endpoints (chat, ask+synthesis, pipelines) are enabled.
+
+        Set EXPERT_LLM=false for data-only mode where clients bring their own LLM.
+        """
+        return os.getenv("EXPERT_LLM", "true").lower() not in ("false", "0", "no")
+
 
 settings = Settings()

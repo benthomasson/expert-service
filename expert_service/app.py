@@ -14,14 +14,21 @@ from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from expert_service.api import projects, pipeline, data, chat, meta_chat, ask
+from expert_service.api import projects, data, ask
 from expert_service.auth import router as auth_router, verify_auth, verify_auth_web, _LoginRedirect
 from expert_service.config import settings
 from expert_service.db.connection import get_session, init_db
 from expert_service.db.models import Assessment, Entry, Project, Source
-from expert_service.chat.meta_agent import invalidate_meta_cache
 from expert_service.rbac import UserInfo
 from expert_service.rms import api as rms_api
+
+# LLM-dependent modules — only imported when LLM mode is enabled.
+# In no-LLM mode, clients bring their own LLM and use the data endpoints directly.
+if settings.llm_enabled:
+    from expert_service.api import pipeline, chat, meta_chat
+    from expert_service.chat.meta_agent import invalidate_meta_cache
+else:
+    def invalidate_meta_cache(): pass
 
 
 @asynccontextmanager
@@ -64,7 +71,7 @@ async def login_redirect_handler(request: Request, exc: _LoginRedirect):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "llm": settings.llm_enabled}
 
 
 # Auth routes (login/callback/logout — always public)
@@ -72,14 +79,20 @@ app.include_router(auth_router)
 
 # API routes (protected by auth)
 app.include_router(projects.router, dependencies=[Depends(verify_auth)])
-app.include_router(pipeline.router, dependencies=[Depends(verify_auth)])
 app.include_router(data.router, dependencies=[Depends(verify_auth)])
-app.include_router(chat.router, dependencies=[Depends(verify_auth)])
-app.include_router(meta_chat.router, dependencies=[Depends(verify_auth)])
+
+if settings.llm_enabled:
+    # LLM mode: chat.router provides /chat (streaming) and /ask (LLM-synthesized)
+    app.include_router(chat.router, dependencies=[Depends(verify_auth)])
+    app.include_router(meta_chat.router, dependencies=[Depends(verify_auth)])
+    app.include_router(pipeline.router, dependencies=[Depends(verify_auth)])
+
+# Always register: FTS-only /ask (shadowed by chat.router's /ask in LLM mode)
 app.include_router(ask.router, dependencies=[Depends(verify_auth)])
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates.env.globals["llm_enabled"] = settings.llm_enabled
 
 
 # --- Web UI Routes ---
@@ -115,19 +128,20 @@ async def home(request: Request, _user: UserInfo = Depends(verify_auth_web), ses
     })
 
 
-@app.get("/meta/chat", response_class=HTMLResponse)
-async def meta_chat_page(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
-    """Meta-expert chat page — routes questions across all domain experts."""
-    result = await session.execute(select(Project).order_by(Project.name))
-    project_list = result.scalars().all()
-    experts = [
-        {"name": p.name, "domain": p.domain, "id": str(p.id)}
-        for p in project_list
-        if p.name != "meta-expert"
-    ]
-    return templates.TemplateResponse(request, "chat/meta_chat.html", {
-        "experts": experts,
-    })
+if settings.llm_enabled:
+    @app.get("/meta/chat", response_class=HTMLResponse)
+    async def meta_chat_page(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
+        """Meta-expert chat page — routes questions across all domain experts."""
+        result = await session.execute(select(Project).order_by(Project.name))
+        project_list = result.scalars().all()
+        experts = [
+            {"name": p.name, "domain": p.domain, "id": str(p.id)}
+            for p in project_list
+            if p.name != "meta-expert"
+        ]
+        return templates.TemplateResponse(request, "chat/meta_chat.html", {
+            "experts": experts,
+        })
 
 
 @app.get("/projects/new", response_class=HTMLResponse)
@@ -194,18 +208,19 @@ async def project_detail(
     })
 
 
-@app.get("/projects/{project_id}/chat", response_class=HTMLResponse)
-async def chat_page(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        return HTMLResponse("Project not found", status_code=404)
-    # Redirect meta-expert project chat to the dedicated meta-expert UI
-    if project.name == "meta-expert":
-        return RedirectResponse("/meta/chat", status_code=303)
-    return templates.TemplateResponse(request, "chat/chat.html", {
-        "project": {"id": project_id, "name": project.name, "domain": project.domain},
-    })
+if settings.llm_enabled:
+    @app.get("/projects/{project_id}/chat", response_class=HTMLResponse)
+    async def chat_page(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
+        result = await session.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one_or_none()
+        if not project:
+            return HTMLResponse("Project not found", status_code=404)
+        # Redirect meta-expert project chat to the dedicated meta-expert UI
+        if project.name == "meta-expert":
+            return RedirectResponse("/meta/chat", status_code=303)
+        return templates.TemplateResponse(request, "chat/chat.html", {
+            "project": {"id": project_id, "name": project.name, "domain": project.domain},
+        })
 
 
 @app.get("/projects/{project_id}/source/{path:path}", response_class=HTMLResponse)
@@ -298,15 +313,16 @@ async def entry_report(
     })
 
 
-@app.get("/projects/{project_id}/ingest", response_class=HTMLResponse)
-async def ingest_form(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        return HTMLResponse("Project not found", status_code=404)
-    return templates.TemplateResponse(request, "ingest/form.html", {
-        "project": {"id": project_id, "name": project.name},
-    })
+if settings.llm_enabled:
+    @app.get("/projects/{project_id}/ingest", response_class=HTMLResponse)
+    async def ingest_form(request: Request, project_id: UUID, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
+        result = await session.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one_or_none()
+        if not project:
+            return HTMLResponse("Project not found", status_code=404)
+        return templates.TemplateResponse(request, "ingest/form.html", {
+            "project": {"id": project_id, "name": project.name},
+        })
 
 
 @app.get("/projects/{project_id}/beliefs/review", response_class=HTMLResponse)
