@@ -41,6 +41,6 @@ function setAll(value) {
 }
 </script>
 {% else %}
-<p>No beliefs awaiting review. <a href="/projects/{{ project.id }}/beliefs/propose">Propose beliefs</a> first.</p>
+<p>No beliefs awaiting review.{% if llm_enabled %} <a href="/projects/{{ project.id }}/beliefs/propose">Propose beliefs</a> first.{% endif %}</p>
 {% endif %}
 {% endblock %}
