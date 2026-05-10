@@ -67,12 +67,14 @@ function enhanceBeliefRefs() {
         if (beliefPattern.test(text)) {
             code.classList.add('belief-ref');
             code.setAttribute('data-belief', text);
+            {% if llm_enabled %}
             const actions = document.createElement('span');
             actions.className = 'belief-actions';
             actions.innerHTML =
                 `<button class="outline secondary" onclick="explainBelief(this, '${text}')">Explain</button>` +
                 `<button class="outline secondary" onclick="whatIfBelief(this, '${text}')">What if?</button>`;
             code.parentNode.insertBefore(actions, code.nextSibling);
+            {% endif %}
         }
     });
 }
