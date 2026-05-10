@@ -10,10 +10,15 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from expert_service.config import settings
 from expert_service.db.connection import get_session
 from expert_service.db.models import Entry, Project, Source
-from expert_service.chat.meta_agent import invalidate_meta_cache
 from expert_service.rms import api as rms_api
+
+if settings.llm_enabled:
+    from expert_service.chat.meta_agent import invalidate_meta_cache
+else:
+    def invalidate_meta_cache(): pass
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
