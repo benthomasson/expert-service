@@ -42,6 +42,13 @@ app = FastAPI(title="Expert Service", version="0.1.0", lifespan=lifespan)
 # Session middleware for OAuth cookie sessions
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
+
+@app.middleware("http")
+async def set_default_user(request: Request, call_next):
+    """Ensure request.state.user always exists for templates."""
+    request.state.user = None
+    return await call_next(request)
+
 # OAuth setup (optional — disabled when credentials not set)
 oauth = None
 if settings.google_client_id and settings.google_client_secret:
