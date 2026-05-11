@@ -21,6 +21,16 @@ from expert_service.rms import api as rms_api
 
 logger = logging.getLogger(__name__)
 
+
+def _check_llm_ready(model: str | None = None) -> str | None:
+    """Check if the LLM is configured and return an error message if not."""
+    model = model or settings.default_model
+    if model.startswith("ollama:"):
+        return None  # Ollama doesn't need cloud credentials
+    if not settings.google_cloud_project:
+        return "LLM mode is enabled but no LLM is configured."
+    return None
+
 # Common stop words to exclude from OR queries (matches reasons_lib)
 _STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -310,6 +320,12 @@ async def chat_stream(
       event: tool_result\\ndata: {"name": "...", "summary": "..."}
       event: done\\ndata: {}
     """
+    llm_error = _check_llm_ready(model)
+    if llm_error:
+        yield f"data: {json.dumps({'type': 'token', 'content': llm_error})}\n\n"
+        yield "event: done\ndata: {}\n\n"
+        return
+
     agent = await get_agent(project_id, model)
     config = {"configurable": {"thread_id": f"{project_id}:{thread_id}"}}
 
@@ -680,6 +696,10 @@ async def dual_ask(
     allowed_connectors: list[str] | None = None,
 ) -> dict:
     """Dual-path: TMS (iterative) + FTS RAG in parallel, merge, return complete answer."""
+    llm_error = _check_llm_ready(model)
+    if llm_error:
+        return {"answer": llm_error, "tms_chars": 0, "rag_chars": 0}
+
     # Phase 1: parallel retrieval
     (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
         asyncio.to_thread(_quick_belief_search, project_id, message, 20),
@@ -747,6 +767,11 @@ async def dual_chat_stream(
     2. Parallel synthesis: TMS answer + FTS RAG answer (two LLM calls)
     3. Merge: combine both answers in a third LLM call, streaming tokens
     """
+    llm_error = _check_llm_ready(model)
+    if llm_error:
+        yield f"data: {json.dumps({'type': 'token', 'content': llm_error})}\n\n"
+        yield "event: done\ndata: {}\n\n"
+        return
     yield f"event: phase\ndata: {json.dumps({'phase': 'searching'})}\n\n"
 
     # Phase 1: parallel retrieval (sync → run in threads)
