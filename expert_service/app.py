@@ -84,6 +84,13 @@ async def health():
 # Auth routes (login/callback/logout — always public)
 app.include_router(auth_router)
 
+
+@app.get("/api/version", dependencies=[Depends(verify_auth)])
+async def version():
+    from expert_service import __version__, _resolve_git_hash
+    return {"version": __version__, "git_hash": _resolve_git_hash()}
+
+
 # API routes (protected by auth)
 app.include_router(projects.router, dependencies=[Depends(verify_auth)])
 app.include_router(data.router, dependencies=[Depends(verify_auth)])

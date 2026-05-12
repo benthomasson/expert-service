@@ -331,6 +331,12 @@ def search_beliefs_fts(project_id: UUID, query: str, limit: int = 10) -> list[di
         db = _db_path(project_id)
         if not Path(db).exists():
             return []
+        # Build OR query for FTS5 (spaces = implicit AND, we want OR)
+        from expert_service.db.search import _get_terms
+        terms = _get_terms(query)
+        if not terms:
+            return []
+        fts5_query = " OR ".join(terms)
         conn = sqlite3.connect(db)
         conn.row_factory = sqlite3.Row
         try:
@@ -342,14 +348,16 @@ def search_beliefs_fts(project_id: UUID, query: str, limit: int = 10) -> list[di
                     "JOIN nodes_fts f ON f.id = n.id "
                     "WHERE nodes_fts MATCH ? AND n.truth_value = 'IN' "
                     "LIMIT ?",
-                    (query, limit),
+                    (fts5_query, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
+                like_conditions = " OR ".join(f"lower(text) LIKE ?" for _ in terms)
+                like_params = [f"%{t}%" for t in terms]
                 rows = conn.execute(
-                    "SELECT id, text, truth_value, source FROM nodes "
-                    "WHERE truth_value = 'IN' AND lower(text) LIKE ? "
-                    "LIMIT ?",
-                    (f"%{query.lower()}%", limit),
+                    f"SELECT id, text, truth_value, source FROM nodes "
+                    f"WHERE truth_value = 'IN' AND ({like_conditions}) "
+                    f"LIMIT ?",
+                    like_params + [limit],
                 ).fetchall()
         except sqlite3.OperationalError:
             return []
