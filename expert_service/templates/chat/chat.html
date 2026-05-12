@@ -191,15 +191,18 @@ function extractCitations(text) {
     // Strip fenced code blocks and inline backticks to avoid false positives
     const cleaned = text.replace(/```[\s\S]*?```/g, '').replace(/`/g, '');
     const citations = { beliefs: [], entries: [], sources: [] };
-
-    // Include colon for namespaced IDs like operations:q2-validates-framework
-    const beliefPattern = /belief[:\s]+(?:ID[:\s]+)?([a-z0-9][a-z0-9._:-]*)/gi;
     let match;
-    while ((match = beliefPattern.exec(cleaned)) !== null) {
-        // Strip trailing punctuation (periods, commas at end of sentences)
-        const id = match[1].toLowerCase().replace(/[.,;:]+$/, '');
-        if (id && !citations.beliefs.includes(id)) {
-            citations.beliefs.push(id);
+
+    // Extract belief IDs: inline [belief-id] refs and **[belief-id]** in Beliefs section
+    // Belief IDs are lowercase with hyphens, dots, colons (e.g. operations:q2-validates-framework)
+    const beliefSection = cleaned.match(/## Beliefs[\s\S]*/);
+    if (beliefSection) {
+        const beliefPattern = /\[([a-z0-9][a-z0-9._:-]*[a-z0-9])\]/gi;
+        while ((match = beliefPattern.exec(beliefSection[0])) !== null) {
+            const id = match[1].toLowerCase().replace(/[.,;:]+$/, '');
+            if (id && !citations.beliefs.includes(id)) {
+                citations.beliefs.push(id);
+            }
         }
     }
 
@@ -212,7 +215,6 @@ function extractCitations(text) {
     }
 
     // Match source references: [Source: slug] (from the Sources section)
-    // Only match inside square brackets to avoid false positives from labels
     const sourcePattern = /\[Source:\s+([a-z0-9][a-z0-9./_-]+)\]/gi;
     while ((match = sourcePattern.exec(cleaned)) !== null) {
         const slug = match[1].replace(/[.,;:)+]+$/, '');
@@ -370,26 +372,38 @@ function renderSourceVerification(result) {
 function linkCitations(container, msgId) {
     const prefix = `ref-${msgId}-`;
 
-    // Phase 1: Add id anchors to source/belief entries like "[7] (Primary) ..."
-    for (const el of container.querySelectorAll('p')) {
-        const match = el.textContent.match(/^\[(\d+)\]\s/);
+    // Phase 1: Collect slug keys from the Sources/Beliefs footnotes
+    // Rendered as <li><strong>[slug]</strong> ...</li>
+    const slugSet = new Set();
+    for (const el of container.querySelectorAll('li')) {
+        const strong = el.querySelector('strong');
+        if (!strong) continue;
+        const match = strong.textContent.match(/^\[([^\]]+)\]$/);
         if (match) {
-            el.id = `${prefix}${match[1]}`;
+            const slug = match[1];
+            slugSet.add(slug);
+            // CSS-safe ID: replace non-alphanumeric with hyphens
+            const safeId = `${prefix}${slug.replace(/[^a-z0-9]/gi, '-')}`;
+            el.id = safeId;
         }
     }
+    if (slugSet.size === 0) return;
 
-    // Phase 2: Turn inline [N] refs into scroll links
+    // Phase 2: Turn inline [slug] refs into scroll links
+    // Build a regex that matches any known slug in brackets
+    const escaped = [...slugSet].map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const pattern = new RegExp('\\[(' + escaped.join('|') + ')\\]', 'g');
+
     for (const el of container.querySelectorAll('p, li')) {
         if (el.id && el.id.startsWith(prefix)) continue;  // skip the targets themselves
-        el.innerHTML = el.innerHTML.replace(
-            /\[(\d+)\]/g,
-            (full, n) => {
-                const targetId = `${prefix}${n}`;
-                const target = container.querySelector(`#${targetId}`);
-                if (!target) return full;  // no matching source, leave as-is
-                return `<a href="#${targetId}" class="cite-link" onclick="event.preventDefault(); document.getElementById('${targetId}').scrollIntoView({behavior:'smooth', block:'center'}); document.getElementById('${targetId}').style.background='var(--pico-primary-focus)'; setTimeout(()=>document.getElementById('${targetId}').style.background='', 1500);">[${n}]</a>`;
-            }
-        );
+        const html = el.innerHTML;
+        const replaced = html.replace(pattern, (full, slug) => {
+            const safeId = `${prefix}${slug.replace(/[^a-z0-9]/gi, '-')}`;
+            const target = container.querySelector(`#${safeId}`);
+            if (!target) return full;
+            return `<a href="#${safeId}" class="cite-link" onclick="event.preventDefault(); document.getElementById('${safeId}').scrollIntoView({behavior:'smooth', block:'center'}); document.getElementById('${safeId}').style.background='var(--pico-primary-focus)'; setTimeout(()=>document.getElementById('${safeId}').style.background='', 1500);">[${slug}]</a>`;
+        });
+        if (replaced !== html) el.innerHTML = replaced;
     }
 }
 
