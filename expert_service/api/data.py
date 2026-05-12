@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from expert_service.chunking import chunk_markdown
 from expert_service.config import settings
-from expert_service.db.connection import get_session
+from expert_service.db.connection import get_session, get_sync_session
 from expert_service.db.models import Entry, Source, entry_sources
 from expert_service.db.search import fts_clause
 from expert_service.rms import api as rms_api
@@ -216,6 +216,45 @@ async def search(
         "entries": [dict(r._mapping) for r in entry_results.all()],
         "beliefs": [{"id": b["id"], "text": b["text"], "truth_value": b.get("truth_value", "IN")} for b in belief_rows],
         "sources": [dict(r._mapping) for r in chunk_results.all()],
+    }
+
+
+@router.get("/deep-search")
+async def deep_search(
+    project_id: UUID,
+    q: str = Query(..., min_length=1),
+):
+    """Dual-path retrieval with IDF ranking — no LLM, just structured context.
+
+    Runs the same retrieval strategy as the LLM-powered /ask endpoint:
+    1. TMS belief search with IDF re-ranking (20 results)
+    2. Source chunk FTS with IDF re-ranking (10 results)
+
+    Returns pre-ranked, pre-formatted results ready for client-side synthesis.
+    """
+    from expert_service.chat.loop import _quick_belief_search, _search_source_chunks
+
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project_id, q, 20),
+        asyncio.to_thread(_search_source_chunks, project_id, q, 10),
+    )
+
+    return {
+        "query": q,
+        "belief_context": belief_ctx,
+        "chunk_context": chunk_ctx,
+        "beliefs": [
+            {"cite_key": s.cite_key, "label": s.label, "slug": s.slug,
+             "url": s.url, "category": s.category}
+            for s in belief_sources
+        ],
+        "sources": [
+            {"cite_key": s.cite_key, "label": s.label, "slug": s.slug,
+             "url": s.url, "category": s.category}
+            for s in chunk_sources
+        ],
+        "belief_count": len(belief_sources),
+        "source_count": len(chunk_sources),
     }
 
 
