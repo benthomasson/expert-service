@@ -234,6 +234,8 @@ def _strip_hallucinated_refs(text: str, valid_keys: set[str]) -> str:
     inventing numbered refs like [5] or citing belief IDs not in the search
     results. This strips any [ref] that isn't in the valid set.
     """
+    stripped: list[str] = []
+
     def _replace(m):
         key = m.group(1)
         end = m.end()
@@ -245,9 +247,13 @@ def _strip_hallucinated_refs(text: str, valid_keys: set[str]) -> str:
         # Keep common markdown patterns
         if key in ('x', ' ', '!') or key.startswith('^'):
             return m.group(0)
+        stripped.append(key)
         return ''
 
-    return re.sub(r'\[([^\]]+)\]', _replace, text)
+    result = re.sub(r'\[([^\]]+)\]', _replace, text)
+    if stripped:
+        logger.info("Stripped %d citation(s): %s", len(stripped), stripped)
+    return result
 
 
 
