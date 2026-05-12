@@ -226,6 +226,29 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
     return "\n".join(lines), cite_map
 
 
+def _strip_hallucinated_refs(text: str, valid_keys: set[str]) -> str:
+    """Remove bracketed references that don't match any valid citation key.
+
+    LLMs (especially smaller models like Gemma3) hallucinate citations —
+    inventing numbered refs like [5] or citing belief IDs not in the search
+    results. This strips any [ref] that isn't in the valid set.
+    """
+    def _replace(m):
+        key = m.group(1)
+        end = m.end()
+        # Keep markdown links [text](url)
+        if end < len(text) and text[end] == '(':
+            return m.group(0)
+        if key in valid_keys:
+            return m.group(0)
+        # Keep common markdown patterns
+        if key in ('x', ' ', '!') or key.startswith('^'):
+            return m.group(0)
+        return ''
+
+    return re.sub(r'\[([^\]]+)\]', _replace, text)
+
+
 def _replace_inline_citations(text: str, cite_map: dict[str, int]) -> str:
     """Replace raw [belief-id] and [slug] markers with numbered [N] refs."""
     if not cite_map:
@@ -621,10 +644,12 @@ async def _tms_answer_iterative(
     connector queries and beliefs discovered during iterative searches.
     """
     beliefs_ctx = initial_beliefs
-    if not beliefs_ctx:
-        return "No matching beliefs found in the network.", []
-
     connector_tools = _connector_tool_section(allowed_connectors)
+
+    if not beliefs_ctx and not connector_tools:
+        return "No matching beliefs found in the network.", []
+    if not beliefs_ctx:
+        beliefs_ctx = "(no belief matches — use query_data if available)"
     logger.info("TMS iterative: connectors=%r, tools_section=%d chars",
                 allowed_connectors, len(connector_tools))
     tool_history: list[dict] = []
@@ -740,8 +765,10 @@ async def dual_ask(
     resp = await llm.ainvoke(merge_prompt)
     merged = _extract_text(resp.content)
 
-    # Append sources section (filtered to what the LLM actually cited)
+    # Strip hallucinated refs, then append sources section
     all_sources = belief_sources + chunk_sources + data_sources
+    valid_keys = {s.cite_key for s in all_sources if s.cite_key}
+    merged = _strip_hallucinated_refs(merged, valid_keys)
     sources_section, cite_map = _build_sources_section(all_sources, response_text=merged)
     merged = _replace_inline_citations(merged, cite_map)
     merged += sources_section
@@ -827,8 +854,10 @@ async def dual_chat_stream(
             merged_text += text
             yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
 
-    # Stream sources section (filtered to what the LLM actually cited)
+    # Strip hallucinated refs, then stream sources section
     all_sources = belief_sources + chunk_sources + data_sources
+    valid_keys = {s.cite_key for s in all_sources if s.cite_key}
+    merged_text = _strip_hallucinated_refs(merged_text, valid_keys)
     sources_section, _cite_map = _build_sources_section(all_sources, response_text=merged_text)
     if sources_section:
         yield f"data: {json.dumps({'type': 'token', 'content': sources_section})}\n\n"

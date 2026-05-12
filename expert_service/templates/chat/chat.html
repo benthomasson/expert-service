@@ -62,6 +62,7 @@ marked.setOptions({ renderer });
     .verify-text { color: var(--pico-muted-color); margin: 0.25rem 0; }
     .verify-detail { font-size: 0.8rem; color: var(--pico-muted-color); font-style: italic; }
     .message-timing { font-size: 0.7rem; color: var(--pico-muted-color); margin-top: 0.5rem; font-style: italic; }
+    .cite-link { text-decoration: none; font-weight: bold; cursor: pointer; }
 </style>
 {% endblock %}
 
@@ -93,6 +94,7 @@ marked.setOptions({ renderer });
 const projectId = "{{ project.id }}";
 const threadId = crypto.randomUUID();
 let sending = false;
+let messageCount = 0;
 
 document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -138,92 +140,30 @@ async function sendMessage() {
 
     appendMessage('user', message);
 
-    // Don't create assistant bubble yet — wait for first token
-    let contentEl = null;
-    let rawMarkdown = '';
+    let contentEl = appendMessage('assistant', '');
+    contentEl.textContent = 'Thinking...';
     const startTime = performance.now();
 
     try {
-        const response = await fetch(`/api/projects/${projectId}/chat`, {
+        const response = await fetch(`/api/projects/${projectId}/ask`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                message: message,
+                question: message,
                 model: document.getElementById('model-select').value,
-                thread_id: threadId,
             }),
         });
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+        const data = await response.json();
+        const answer = data.answer || data.error || 'No answer returned.';
 
-        while (true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, {stream: true});
+        messageCount++;
+        contentEl.innerHTML = marked.parse(answer);
+        linkCitations(contentEl, messageCount);
+        addExplainButtons(contentEl);
 
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-
-            let eventType = null;
-            for (const line of lines) {
-                if (line.startsWith('event: ')) {
-                    eventType = line.slice(7).trim();
-                } else if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        if (eventType === 'tool_call') {
-                            appendToolIndicator(`Using tool: ${data.name}...`);
-                        } else if (eventType === 'tool_result') {
-                            // Tool result received, LLM will continue
-                        } else if (eventType === 'done') {
-                            // Final render — parse full markdown
-                            if (contentEl && rawMarkdown) {
-                                contentEl.innerHTML = marked.parse(rawMarkdown);
-                                addExplainButtons(contentEl);
-                            }
-                        } else if (data.type === 'token') {
-                            // Create assistant bubble on first token
-                            if (!contentEl) {
-                                contentEl = appendMessage('assistant', '');
-                            }
-                            rawMarkdown += data.content;
-                            // Show plain text while streaming, render markdown on done
-                            contentEl.textContent = rawMarkdown;
-                            scrollToBottom();
-                        }
-                    } catch (e) {
-                        // Skip malformed JSON
-                    }
-                    eventType = null;
-                }
-            }
-        }
-        // Fallback render if done event was missed
-        if (contentEl && rawMarkdown) {
-            contentEl.innerHTML = marked.parse(rawMarkdown);
-            addExplainButtons(contentEl);
-        }
-    } catch (err) {
-        if (!contentEl) {
-            contentEl = appendMessage('assistant', '');
-        }
-        contentEl.textContent = `Error: ${err.message}`;
-    }
-
-    // Show elapsed time
-    if (contentEl) {
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        const timingEl = document.createElement('div');
-        timingEl.className = 'message-timing';
-        timingEl.textContent = `${elapsed}s`;
-        contentEl.parentElement.appendChild(timingEl);
-    }
-
-    // Add verify button if citations found
-    if (contentEl && rawMarkdown) {
-        const citations = extractCitations(rawMarkdown);
+        // Add verify button if citations found
+        const citations = extractCitations(answer);
         if (citations.beliefs.length > 0 || citations.entries.length > 0 || citations.sources.length > 0) {
             const verifyBtn = document.createElement('button');
             verifyBtn.className = 'outline secondary verify-btn';
@@ -231,7 +171,16 @@ async function sendMessage() {
             verifyBtn.onclick = () => verifyCitations(verifyBtn, citations);
             contentEl.parentElement.appendChild(verifyBtn);
         }
+    } catch (err) {
+        contentEl.textContent = `Error: ${err.message}`;
     }
+
+    // Show elapsed time
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+    const timingEl = document.createElement('div');
+    timingEl.className = 'message-timing';
+    timingEl.textContent = `${elapsed}s`;
+    contentEl.parentElement.appendChild(timingEl);
 
     sending = false;
     document.getElementById('send-btn').removeAttribute('aria-busy');
@@ -262,10 +211,9 @@ function extractCitations(text) {
         }
     }
 
-    // Match source references: Source: <slug> or (Source: <slug>)
-    // Require slug to contain a dot or hyphen to avoid matching bare agent names
-    // like "operations" from belief source fields
-    const sourcePattern = /Source[:\s]+([a-z0-9][a-z0-9._-]*[._-][a-z0-9._-]*)/gi;
+    // Match source references: [Source: slug] (from the Sources section)
+    // Only match inside square brackets to avoid false positives from labels
+    const sourcePattern = /\[Source:\s+([a-z0-9][a-z0-9./_-]+)\]/gi;
     while ((match = sourcePattern.exec(cleaned)) !== null) {
         const slug = match[1].replace(/[.,;:)+]+$/, '');
         if (slug && !citations.sources.includes(slug)) {
@@ -417,6 +365,32 @@ function renderSourceVerification(result) {
             ${details}
         </div>
     </div>`;
+}
+
+function linkCitations(container, msgId) {
+    const prefix = `ref-${msgId}-`;
+
+    // Phase 1: Add id anchors to source/belief entries like "[7] (Primary) ..."
+    for (const el of container.querySelectorAll('p')) {
+        const match = el.textContent.match(/^\[(\d+)\]\s/);
+        if (match) {
+            el.id = `${prefix}${match[1]}`;
+        }
+    }
+
+    // Phase 2: Turn inline [N] refs into scroll links
+    for (const el of container.querySelectorAll('p, li')) {
+        if (el.id && el.id.startsWith(prefix)) continue;  // skip the targets themselves
+        el.innerHTML = el.innerHTML.replace(
+            /\[(\d+)\]/g,
+            (full, n) => {
+                const targetId = `${prefix}${n}`;
+                const target = container.querySelector(`#${targetId}`);
+                if (!target) return full;  // no matching source, leave as-is
+                return `<a href="#${targetId}" class="cite-link" onclick="event.preventDefault(); document.getElementById('${targetId}').scrollIntoView({behavior:'smooth', block:'center'}); document.getElementById('${targetId}').style.background='var(--pico-primary-focus)'; setTimeout(()=>document.getElementById('${targetId}').style.background='', 1500);">[${n}]</a>`;
+            }
+        );
+    }
 }
 
 function addExplainButtons(container) {
