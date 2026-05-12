@@ -773,6 +773,90 @@ async def dual_ask(
     }
 
 
+SINGLE_PASS_PROMPT = """\
+You are an expert assistant answering questions using a curated knowledge base.
+You have two sources of context:
+
+1. **TMS Beliefs** — verified facts from a Truth Maintenance System, each with a truth value (IN = accepted, OUT = retracted) and a belief ID. Prefer IN beliefs. Cite beliefs by their ID in square brackets, e.g. [ec2-pay-per-instance-second].
+
+2. **Source Documents** — relevant passages from source documents, each with a source slug. Cite sources by their slug in square brackets, e.g. [ec2-instance-types].
+
+Rules:
+- Answer the question comprehensively using ONLY the provided context
+- If beliefs and sources disagree, prefer beliefs (they have been through truth maintenance)
+- Cite your sources inline using [belief-id] or [source-slug]
+- Structure your answer with clear headings and bullet points
+- If the context does not contain enough information, say so explicitly
+- Do not use knowledge outside the provided context
+
+## Question
+
+{question}
+
+## TMS Beliefs
+
+{beliefs}
+
+## Source Documents
+
+{sources}
+
+---
+
+Answer the question using the context above. Cite sources inline."""
+
+
+async def single_ask(
+    project_id: UUID,
+    model: str,
+    message: str,
+) -> dict:
+    """Single-pass: deep-search retrieval + one LLM synthesis call.
+
+    Better for smaller models (e.g. Gemma3) that struggle with the
+    3-call dual-path merge pattern. Mirrors the expert CLI ask-local flow.
+    """
+    llm_error = _check_llm_ready(model)
+    if llm_error:
+        return {"answer": llm_error, "tms_chars": 0, "rag_chars": 0}
+
+    # Retrieval: same as deep-search
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project_id, message, 20),
+        asyncio.to_thread(_search_source_chunks, project_id, message, 10),
+    )
+
+    if not belief_ctx and not chunk_ctx:
+        return {
+            "answer": "No matching beliefs or source documents found for this question.",
+            "tms_chars": 0,
+            "rag_chars": 0,
+        }
+
+    # Single LLM call
+    llm = get_chat_model(model)
+    prompt = SINGLE_PASS_PROMPT.format(
+        question=message,
+        beliefs=belief_ctx or "(none found)",
+        sources=chunk_ctx or "(none found)",
+    )
+    resp = await llm.ainvoke(prompt, config=_langfuse_config())
+    answer = _extract_text(resp.content)
+
+    # Strip hallucinated refs, append sources section
+    all_sources = belief_sources + chunk_sources
+    valid_keys = {s.cite_key for s in all_sources if s.cite_key}
+    answer = _strip_hallucinated_refs(answer, valid_keys)
+    sources_section = _build_sources_section(all_sources, response_text=answer)
+    answer += sources_section
+
+    return {
+        "answer": answer,
+        "tms_chars": len(belief_ctx or ""),
+        "rag_chars": len(chunk_ctx or ""),
+    }
+
+
 async def dual_chat_stream(
     project_id: UUID,
     model: str,

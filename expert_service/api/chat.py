@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text as sa_text
 
-from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream
+from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream, single_ask
 from expert_service.db.connection import get_sync_session
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
@@ -67,11 +67,14 @@ async def chat(project_id: UUID, data: ChatRequest):
 class AskRequest(BaseModel):
     question: str
     model: str = "claude-sonnet-4-6"
+    mode: str = "dual"  # "dual" (3-call merge) or "single" (1-call synthesis)
 
 
 @router.post("/ask")
 async def ask(project_id: UUID, data: AskRequest):
-    """Non-streaming dual-path answer. Returns complete JSON — designed for evals."""
+    """Non-streaming answer. Mode: 'dual' (3-call merge) or 'single' (1-call synthesis)."""
+    if data.mode == "single":
+        return await single_ask(project_id, data.model, data.question)
     allowed = _get_project_connectors(project_id)
     return await dual_ask(project_id, data.model, data.question,
                           allowed_connectors=allowed)
