@@ -163,7 +163,7 @@ def _extract_cited_keys(text: str) -> set[str]:
     return keys
 
 
-def _build_sources_section(sources: list[SourceRef], response_text: str = "") -> tuple[str, dict[str, int]]:
+def _build_sources_section(sources: list[SourceRef], response_text: str = "") -> str:
     """Build a ## Sources section from collected source refs.
 
     If response_text is provided, only includes sources that the LLM
@@ -204,35 +204,27 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
     rest = rest[:MAX_SOURCES - len(data)]
     sourced = data + rest
 
-    # Build cite_key → number mapping for inline replacement
-    cite_map: dict[str, int] = {}
     lines = []
-    idx = 1
 
     if sourced:
         lines += ["", "", "## Sources", ""]
         for s in sourced:
-            if s.cite_key:
-                cite_map[s.cite_key] = idx
-            lines.append(f"[{idx}] ({s.category}) {s.label}")
+            key = s.cite_key or s.slug
+            lines.append(f"- **[{key}]** ({s.category}) {s.label}")
             if s.url:
-                lines.append(f"[Source]({s.url})")
+                lines.append(f"  [Source]({s.url})")
             elif "/" in s.slug:
-                lines.append(f"[Source: {s.slug}]")
+                lines.append(f"  [Source: {s.slug}]")
             lines.append("")
-            idx += 1
 
     if beliefs:
         lines += ["", "## Beliefs", ""]
         for s in beliefs:
-            if s.cite_key:
-                cite_map[s.cite_key] = idx
-            lines.append(f"[{idx}] {s.label}")
-            lines.append(f"belief: {s.cite_key}")
+            key = s.cite_key or s.slug
+            lines.append(f"- **[{key}]** {s.label}")
             lines.append("")
-            idx += 1
 
-    return "\n".join(lines), cite_map
+    return "\n".join(lines)
 
 
 def _strip_hallucinated_refs(text: str, valid_keys: set[str]) -> str:
@@ -257,15 +249,6 @@ def _strip_hallucinated_refs(text: str, valid_keys: set[str]) -> str:
 
     return re.sub(r'\[([^\]]+)\]', _replace, text)
 
-
-def _replace_inline_citations(text: str, cite_map: dict[str, int]) -> str:
-    """Replace raw [belief-id] and [slug] markers with numbered [N] refs."""
-    if not cite_map:
-        return text
-    # Sort by length descending to avoid partial matches
-    for key in sorted(cite_map, key=len, reverse=True):
-        text = text.replace(f"[{key}]", f"[{cite_map[key]}]")
-    return text
 
 
 def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
@@ -774,8 +757,7 @@ async def dual_ask(
     all_sources = belief_sources + chunk_sources + data_sources
     valid_keys = {s.cite_key for s in all_sources if s.cite_key}
     merged = _strip_hallucinated_refs(merged, valid_keys)
-    sources_section, cite_map = _build_sources_section(all_sources, response_text=merged)
-    merged = _replace_inline_citations(merged, cite_map)
+    sources_section = _build_sources_section(all_sources, response_text=merged)
     merged += sources_section
 
     return {
@@ -863,7 +845,7 @@ async def dual_chat_stream(
     all_sources = belief_sources + chunk_sources + data_sources
     valid_keys = {s.cite_key for s in all_sources if s.cite_key}
     merged_text = _strip_hallucinated_refs(merged_text, valid_keys)
-    sources_section, _cite_map = _build_sources_section(all_sources, response_text=merged_text)
+    sources_section = _build_sources_section(all_sources, response_text=merged_text)
     if sources_section:
         yield f"data: {json.dumps({'type': 'token', 'content': sources_section})}\n\n"
 
