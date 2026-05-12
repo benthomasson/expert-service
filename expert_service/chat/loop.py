@@ -22,6 +22,15 @@ from expert_service.rms import api as rms_api
 logger = logging.getLogger(__name__)
 
 
+def _langfuse_config() -> dict:
+    """Return a LangChain config dict with langfuse callbacks if configured."""
+    if not settings.langfuse_secret_key:
+        return {}
+    from langfuse.langchain import CallbackHandler
+
+    return {"callbacks": [CallbackHandler()]}
+
+
 def _check_llm_ready(model: str | None = None) -> str | None:
     """Check if the LLM is configured and return an error message if not."""
     model = model or settings.default_model
@@ -351,11 +360,7 @@ async def chat_stream(
 
     agent = await get_agent(project_id, model)
     config = {"configurable": {"thread_id": f"{project_id}:{thread_id}"}}
-
-    if settings.langfuse_secret_key:
-        from langfuse.langchain import CallbackHandler
-
-        config["callbacks"] = [CallbackHandler()]
+    config.update(_langfuse_config())
 
     # Belief-first pre-check: inject matching beliefs so the LLM can
     # answer directly without a tool call when beliefs are sufficient.
@@ -674,7 +679,7 @@ async def _tms_answer_iterative(
                 tool_history=history_section, connector_tools=connector_tools,
             )
 
-        resp = await llm.ainvoke(prompt)
+        resp = await llm.ainvoke(prompt, config=_langfuse_config())
         response_text = _extract_text(resp.content)
 
         tool_call = _extract_tool_call(response_text)
@@ -749,7 +754,7 @@ async def dual_ask(
         if not chunk_ctx:
             return "No relevant source documents found."
         prompt = FTS_RAG_PROMPT.format(context=chunk_ctx, question=message)
-        resp = await llm.ainvoke(prompt)
+        resp = await llm.ainvoke(prompt, config=_langfuse_config())
         return _extract_text(resp.content)
 
     (answer_tms, data_sources), answer_fts = await asyncio.gather(
@@ -762,7 +767,7 @@ async def dual_ask(
     merge_prompt = MERGE_PROMPT.format(
         question=message, answer_tms=answer_tms, answer_fts=answer_fts,
     )
-    resp = await llm.ainvoke(merge_prompt)
+    resp = await llm.ainvoke(merge_prompt, config=_langfuse_config())
     merged = _extract_text(resp.content)
 
     # Strip hallucinated refs, then append sources section
@@ -827,7 +832,7 @@ async def dual_chat_stream(
         if not chunk_ctx:
             return "No relevant source documents found."
         prompt = FTS_RAG_PROMPT.format(context=chunk_ctx, question=message)
-        resp = await llm.ainvoke(prompt)
+        resp = await llm.ainvoke(prompt, config=_langfuse_config())
         return _extract_text(resp.content)
 
     (answer_tms, data_sources), answer_fts = await asyncio.gather(
@@ -848,7 +853,7 @@ async def dual_chat_stream(
         question=message, answer_tms=answer_tms, answer_fts=answer_fts,
     )
     merged_text = ""
-    async for chunk in llm.astream(merge_prompt):
+    async for chunk in llm.astream(merge_prompt, config=_langfuse_config()):
         text = _extract_text(chunk.content) if chunk.content else ""
         if text:
             merged_text += text

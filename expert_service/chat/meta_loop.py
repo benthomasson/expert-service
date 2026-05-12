@@ -11,7 +11,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from expert_service.chat.loop import _extract_text
+from expert_service.chat.loop import _extract_text, _langfuse_config
 from expert_service.chat.meta_agent import get_meta_agent
 from expert_service.config import settings
 
@@ -47,11 +47,7 @@ async def meta_chat_stream(
     """Stream a meta-expert chat response via SSE."""
     agent = await get_meta_agent(model)
     config = {"configurable": {"thread_id": f"meta:{thread_id}"}}
-
-    if settings.langfuse_secret_key:
-        from langfuse.langchain import CallbackHandler
-
-        config["callbacks"] = [CallbackHandler()]
+    config.update(_langfuse_config())
 
     inputs = {"messages": [{"role": "user", "content": message}]}
     buffered_tokens: list[str] = []
