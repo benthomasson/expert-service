@@ -4,8 +4,10 @@ import json
 import logging
 from uuid import UUID, uuid4
 
+import anthropic
 import httpx
 from fastapi import APIRouter
+from google.api_core import exceptions as google_exceptions
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text as sa_text
@@ -82,7 +84,7 @@ async def ask(project_id: UUID, data: AskRequest):
         allowed = _get_project_connectors(project_id)
         return await dual_ask(project_id, data.model, data.question,
                               allowed_connectors=allowed)
-    except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
+    except (httpx.HTTPError, anthropic.APIError, google_exceptions.GoogleAPIError, OSError, TimeoutError) as exc:
         logger.exception("LLM call failed for project %s", project_id)
         return JSONResponse(
             status_code=502,
