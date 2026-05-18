@@ -21,6 +21,12 @@ from expert_service.rms import api as rms_api
 
 logger = logging.getLogger(__name__)
 
+# Context budget constants
+MAX_CHUNK_CHARS = 2000  # Truncate individual source chunks
+MAX_CONTEXT_CHARS = 30000  # Total source chunk context budget (~7500 tokens)
+MAX_BELIEF_CONTEXT_CHARS = 30000  # Total belief context budget (~7500 tokens)
+MAX_TOOL_RESULT_CHARS = 10000  # Truncate individual tool/connector results
+
 
 def _langfuse_config() -> dict:
     """Return a LangChain config dict with langfuse callbacks if configured."""
@@ -281,9 +287,18 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
             belief_rows = sorted(belief_rows, key=lambda r: _idf_score(r["text"], idfs), reverse=True)
 
     belief_rows = belief_rows[:limit]
-    context = "\n".join(
-        f"[{r.get('truth_value', 'IN')}] {r['id']} — {r['text']}" for r in belief_rows
-    )
+    parts = []
+    total = 0
+    included_rows = []
+    for r in belief_rows:
+        line = f"[{r.get('truth_value', 'IN')}] {r['id']} — {r['text']}"
+        if total + len(line) > MAX_BELIEF_CONTEXT_CHARS:
+            break
+        parts.append(line)
+        total += len(line)
+        included_rows.append(r)
+    context = "\n".join(parts)
+    belief_rows = included_rows
     sources = []
     for r in belief_rows:
         rid = r["id"]
@@ -406,10 +421,6 @@ async def chat_stream(
 
 
 # --- Dual-path architecture ---
-
-MAX_CHUNK_CHARS = 2000  # Truncate individual chunks
-MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
-
 
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
     """FTS search over source_chunks with IDF re-ranking.
@@ -652,10 +663,12 @@ async def _tms_answer_iterative(
     for iteration in range(MAX_TMS_ITERATIONS):
         history_section = ""
         if tool_history:
-            parts = [
-                f"### Tool call: {e['tool']}(\"{e['query']}\")\n\n{e['result']}"
-                for e in tool_history
-            ]
+            parts = []
+            for e in tool_history:
+                result = e['result']
+                if len(result) > MAX_TOOL_RESULT_CHARS:
+                    result = result[:MAX_TOOL_RESULT_CHARS] + "\n[...truncated]"
+                parts.append(f"### Tool call: {e['tool']}(\"{e['query']}\")\n\n{result}")
             history_section = "\n\n## Additional search results\n\n" + "\n\n---\n\n".join(parts)
 
         if iteration == MAX_TMS_ITERATIONS - 1:
@@ -693,6 +706,8 @@ async def _tms_answer_iterative(
                         iteration + 1, connector, q)
             result = await query_data(q, connector_name=connector,
                                       allowed=allowed_connectors)
+            if len(result) > MAX_TOOL_RESULT_CHARS:
+                result = result[:MAX_TOOL_RESULT_CHARS] + "\n[...truncated]"
             tool_history.append({"tool": f"query_data({connector or 'all'})",
                                  "query": q, "result": result})
             connector_label = (connector or "data").title()
@@ -770,6 +785,90 @@ async def dual_ask(
         "answer": merged,
         "tms_chars": len(answer_tms),
         "rag_chars": len(answer_fts),
+    }
+
+
+SINGLE_PASS_PROMPT = """\
+You are an expert assistant answering questions using a curated knowledge base.
+You have two sources of context:
+
+1. **TMS Beliefs** — verified facts from a Truth Maintenance System, each with a truth value (IN = accepted, OUT = retracted) and a belief ID. Prefer IN beliefs. Cite beliefs by their ID in square brackets, e.g. [ec2-pay-per-instance-second].
+
+2. **Source Documents** — relevant passages from source documents, each with a source slug. Cite sources by their slug in square brackets, e.g. [ec2-instance-types].
+
+Rules:
+- Answer the question comprehensively using ONLY the provided context
+- If beliefs and sources disagree, prefer beliefs (they have been through truth maintenance)
+- Cite your sources inline using [belief-id] or [source-slug]
+- Structure your answer with clear headings and bullet points
+- If the context does not contain enough information, say so explicitly
+- Do not use knowledge outside the provided context
+
+## Question
+
+{question}
+
+## TMS Beliefs
+
+{beliefs}
+
+## Source Documents
+
+{sources}
+
+---
+
+Answer the question using the context above. Cite sources inline."""
+
+
+async def single_ask(
+    project_id: UUID,
+    model: str,
+    message: str,
+) -> dict:
+    """Single-pass: deep-search retrieval + one LLM synthesis call.
+
+    Better for smaller models (e.g. Gemma3) that struggle with the
+    3-call dual-path merge pattern. Mirrors the expert CLI ask-local flow.
+    """
+    llm_error = _check_llm_ready(model)
+    if llm_error:
+        return {"answer": llm_error, "tms_chars": 0, "rag_chars": 0}
+
+    # Retrieval: same as deep-search
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project_id, message, 20),
+        asyncio.to_thread(_search_source_chunks, project_id, message, 10),
+    )
+
+    if not belief_ctx and not chunk_ctx:
+        return {
+            "answer": "No matching beliefs or source documents found for this question.",
+            "tms_chars": 0,
+            "rag_chars": 0,
+        }
+
+    # Single LLM call
+    llm = get_chat_model(model)
+    prompt = SINGLE_PASS_PROMPT.format(
+        question=message,
+        beliefs=belief_ctx or "(none found)",
+        sources=chunk_ctx or "(none found)",
+    )
+    resp = await llm.ainvoke(prompt, config=_langfuse_config())
+    answer = _extract_text(resp.content)
+
+    # Strip hallucinated refs, append sources section
+    all_sources = belief_sources + chunk_sources
+    valid_keys = {s.cite_key for s in all_sources if s.cite_key}
+    answer = _strip_hallucinated_refs(answer, valid_keys)
+    sources_section = _build_sources_section(all_sources, response_text=answer)
+    answer += sources_section
+
+    return {
+        "answer": answer,
+        "tms_chars": len(belief_ctx or ""),
+        "rag_chars": len(chunk_ctx or ""),
     }
 
 

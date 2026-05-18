@@ -23,7 +23,8 @@ if _is_sqlite:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 else:
-    engine = create_async_engine(settings.database_url, echo=False)
+    engine = create_async_engine(settings.database_url, echo=False,
+                                 pool_size=5, max_overflow=5)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -49,7 +50,8 @@ def get_sync_engine():
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
         else:
-            _sync_engine = create_engine(settings.database_url_sync, echo=False)
+            _sync_engine = create_engine(settings.database_url_sync, echo=False,
+                                         pool_size=5, max_overflow=5)
     return _sync_engine
 
 

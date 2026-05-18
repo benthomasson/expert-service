@@ -27,6 +27,7 @@ class ProjectCreate(BaseModel):
     name: str
     domain: str
     config: dict = {}
+    public: bool = False
 
 
 class ProjectResponse(BaseModel):
@@ -34,6 +35,7 @@ class ProjectResponse(BaseModel):
     name: str
     domain: str
     config: dict
+    public: bool = False
     created_at: str
     source_count: int = 0
     entry_count: int = 0
@@ -44,7 +46,7 @@ class ProjectResponse(BaseModel):
 
 @router.post("", response_model=ProjectResponse)
 async def create_project(data: ProjectCreate, session: AsyncSession = Depends(get_session)):
-    project = Project(name=data.name, domain=data.domain, config=data.config)
+    project = Project(name=data.name, domain=data.domain, config=data.config, public=data.public)
     session.add(project)
     await session.commit()
     await session.refresh(project)
@@ -54,6 +56,7 @@ async def create_project(data: ProjectCreate, session: AsyncSession = Depends(ge
         name=project.name,
         domain=project.domain,
         config=project.config or {},
+        public=project.public,
         created_at=project.created_at.isoformat(),
     )
 
@@ -78,6 +81,7 @@ async def list_projects(session: AsyncSession = Depends(get_session)):
             name=p.name,
             domain=p.domain,
             config=p.config or {},
+            public=p.public,
             created_at=p.created_at.isoformat(),
             source_count=sc,
             entry_count=ec,
@@ -98,6 +102,7 @@ async def get_project(project_id: UUID, session: AsyncSession = Depends(get_sess
         name=project.name,
         domain=project.domain,
         config=project.config or {},
+        public=project.public,
         created_at=project.created_at.isoformat(),
         source_count=sc,
         entry_count=ec,

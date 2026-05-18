@@ -4,6 +4,7 @@ import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from expert_service.auth import verify_auth
 from pydantic import BaseModel
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -302,7 +303,7 @@ class ClaimsImportRequest(BaseModel):
     claims: list[ClaimImport]
 
 
-@router.post("/import/sources")
+@router.post("/import/sources", dependencies=[Depends(verify_auth)])
 async def import_sources(
     project_id: UUID,
     data: SourcesImportRequest,
@@ -351,7 +352,7 @@ async def import_sources(
     return {"imported": imported, "skipped": skipped}
 
 
-@router.post("/import/entries")
+@router.post("/import/entries", dependencies=[Depends(verify_auth)])
 async def import_entries(
     project_id: UUID,
     data: EntriesImportRequest,
@@ -403,7 +404,7 @@ async def import_entries(
     return {"imported": imported, "skipped": skipped, "linked": linked}
 
 
-@router.post("/import/beliefs")
+@router.post("/import/beliefs", dependencies=[Depends(verify_auth)])
 async def import_beliefs(
     project_id: UUID,
     data: ClaimsImportRequest,
@@ -441,7 +442,7 @@ async def import_beliefs(
     return await asyncio.to_thread(_do_import)
 
 
-@router.post("/link-entries-sources")
+@router.post("/link-entries-sources", dependencies=[Depends(verify_auth)])
 async def link_entries_sources(
     project_id: UUID,
     session: AsyncSession = Depends(get_session),
@@ -514,7 +515,7 @@ async def link_entries_sources(
     return {"linked": linked, "migrated": migrated, "already_linked": already_linked}
 
 
-@router.post("/chunk-sources")
+@router.post("/chunk-sources", dependencies=[Depends(verify_auth)])
 async def chunk_sources(
     project_id: UUID,
     session: AsyncSession = Depends(get_session),

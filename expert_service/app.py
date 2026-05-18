@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
 from expert_service.api import projects, data, ask
-from expert_service.auth import router as auth_router, verify_auth, verify_auth_web, _LoginRedirect
+from expert_service.auth import router as auth_router, verify_auth, verify_auth_or_public, verify_auth_web, _LoginRedirect
 from expert_service.config import settings
 from expert_service.db.connection import get_session, init_db
 from expert_service.db.models import Assessment, Entry, Project, Source
@@ -76,9 +76,24 @@ async def login_redirect_handler(request: Request, exc: _LoginRedirect):
     return RedirectResponse(url="/login")
 
 
+def _open_fds() -> dict:
+    """Return open file descriptor count and limit."""
+    import os
+    import resource
+    try:
+        count = len(os.listdir("/dev/fd"))
+    except OSError:
+        try:
+            count = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+        except OSError:
+            count = -1
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    return {"open": count, "limit_soft": soft, "limit_hard": hard}
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "llm": settings.llm_enabled}
+    return {"status": "ok", "llm": settings.llm_enabled, "fds": _open_fds()}
 
 
 # Auth routes (login/callback/logout — always public)
@@ -93,16 +108,16 @@ async def version():
 
 # API routes (protected by auth)
 app.include_router(projects.router, dependencies=[Depends(verify_auth)])
-app.include_router(data.router, dependencies=[Depends(verify_auth)])
+app.include_router(data.router, dependencies=[Depends(verify_auth_or_public)])
 
 if settings.llm_enabled:
     # LLM mode: chat.router provides /chat (streaming) and /ask (LLM-synthesized)
-    app.include_router(chat.router, dependencies=[Depends(verify_auth)])
+    app.include_router(chat.router, dependencies=[Depends(verify_auth_or_public)])
     app.include_router(meta_chat.router, dependencies=[Depends(verify_auth)])
     app.include_router(pipeline.router, dependencies=[Depends(verify_auth)])
 
 # Always register: FTS-only /ask (shadowed by chat.router's /ask in LLM mode)
-app.include_router(ask.router, dependencies=[Depends(verify_auth)])
+app.include_router(ask.router, dependencies=[Depends(verify_auth_or_public)])
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

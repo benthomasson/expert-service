@@ -1,75 +1,68 @@
 # Checkpoint
 
-**Saved:** 2026-03-25 12:30
+**Saved:** 2026-05-14 10:30
 **Project:** /Users/ben/git/expert-service
 
 ## Task
 
-Building meta-expert evaluation framework for expert-service. Phase 1 (routing accuracy) complete and smoke-tested. Migrated from rms to ftl-reasons earlier this session.
+Production hardening of expert-service: FD exhaustion fix, context window overflow fix, error handling, architecture documentation, and sd-architect diagram.
 
 ## Status
 
 ### Completed this session
-- [x] Migrated `rms` → `ftl-reasons` (1 dependency + 5 import changes)
-- [x] Fixed Starlette `TemplateResponse` API (7 calls)
-- [x] Fixed Colima disk space (removed 50GB langfuse volumes)
-- [x] Fixed garbled multi-expert streaming (`awaiting_tools` flag)
-- [x] Fixed reflection prompt — v3 requires cited sources before recording beliefs
-- [x] Retracted bad beliefs from transient errors and uncited answers
-- [x] Smoke tested 7 meta-expert queries across 3 experts
-- [x] Built Phase 1 meta-expert eval: driver, scorer, 45 questions, CLI runner
-- [x] Smoke-tested eval: single-domain 100% F1, cross-domain 83% F1, out-of-scope 100% F1
-- [x] All commits pushed
-
-### Not yet started
-- [ ] Run full 45-question routing eval
-- [ ] Phase 2: Synthesis quality (CIAK scoring)
-- [ ] Phase 3: Citation preservation scoring
-- [ ] Programmatic citation check in reflection step (not just prompt-based)
+- [x] Diagnosed FD exhaustion — macOS default 256 soft limit was the bottleneck, not rate limiting or DNS
+- [x] Added `ulimit -n 10240` to `scripts/start.local.sh`
+- [x] Added `pool_size=5, max_overflow=5` to both async and sync engines in `db/connection.py`
+- [x] Added `/health` endpoint FD monitoring: `_open_fds()` returns `{open, limit_soft, limit_hard}`
+- [x] Added try/except on `/ask` endpoint — returns 502 JSON instead of 500 traceback
+- [x] Diagnosed context window overflow — 211K tokens > 200K limit from unbounded beliefs + tool history
+- [x] Added context budgets: `MAX_BELIEF_CONTEXT_CHARS=30000`, `MAX_TOOL_RESULT_CHARS=10000` (constants moved to top of loop.py)
+- [x] Confirmed FD fix working under load: 366 FDs at peak with 4 concurrent users (was crashing at 256)
+- [x] Filed benthomasson/expert#1 — Plugin system for expert CLI
+- [x] Filed benthomasson/expert#2 — Rename package to ftl-expert for PyPI
+- [x] Written entries: FD exhaustion fix, context window overflow, architecture overview
+- [x] Created `architecture.json` for sd-architect visualization
+- [ ] Context budget changes not yet deployed (need restart)
 
 ## Key Files
 
-- `eval/meta_systems.py` — `MetaExpertDriver` captures ask_expert calls, reflection events, citations from SSE
-- `eval/meta_scoring.py` — `score_routing()` precision/recall/F1, `score_citations()`, `aggregate_routing_scores()`
-- `eval/meta_questions.json` — 45 questions: 30 single-domain, 10 cross-domain, 5 out-of-scope
-- `eval/run_meta_eval.py` — CLI runner with `--category`, `--limit`, `--model`, `--output`
-- `expert_service/chat/meta_loop.py` — streaming fix + reflection prompt v3
-- `expert_service/chat/meta_agent.py` — meta-expert agent factory, system prompt
-- `expert_service/chat/meta_tools.py` — `ask_expert` and `list_experts` tools
+- `expert_service/db/connection.py` — Added pool_size/max_overflow caps on both engines
+- `expert_service/chat/loop.py` — Added MAX_BELIEF_CONTEXT_CHARS, MAX_TOOL_RESULT_CHARS at top; belief search now budget-capped; tool history results truncated at 10K chars
+- `expert_service/api/chat.py` — Added try/except returning 502 JSON on LLM failures
+- `expert_service/app.py` — Added `_open_fds()` helper and FD info to `/health` endpoint
+- `scripts/start.local.sh` — Added `ulimit -n 10240`
+- `architecture.json` — sd-architect diagram (13 components, 12 connections)
+- `entries/2026/05/13/file-descriptor-exhaustion-fix-*.md` — FD fix writeup
+- `entries/2026/05/13/context-window-overflow-*.md` — Context overflow writeup
+- `entries/2026/05/14/expert-service-architecture-*.md` — Full architecture doc
 
 ## Commands
 
 ```bash
-# Run full meta-expert routing eval
-uv run python3 -m eval.run_meta_eval
+# Check FD usage on running service
+curl localhost:8000/health | jq .fds
 
-# Run by category
-uv run python3 -m eval.run_meta_eval --category single --limit 5
-uv run python3 -m eval.run_meta_eval --category cross
-uv run python3 -m eval.run_meta_eval --category out-of-scope
+# Start with FD fix
+./scripts/start.local.sh
 
-# RMS operations against Docker PG
-DATABASE_URL_SYNC="postgresql+psycopg://expert:expert_dev@localhost:5433/expert_service" uv run python3 -c "
-from expert_service.rms.api import search
-from uuid import UUID
-pid = UUID('b3ba781a-7a17-459a-9436-6531a35774bc')  # meta-expert
-print(search(pid, 'knows'))
-"
+# Visualize architecture
+python ~/git/sd-architect/demos/sd_demo.py architecture.json
 
-# Rebuild service
-docker compose up -d --build
+# Gemma3 single-pass mode via API
+curl -X POST localhost:8000/api/projects/{id}/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"test","model":"ollama:gemma3:27b","mode":"single"}'
 ```
 
 ## Next Step
 
-Run the full 45-question routing eval (`uv run python3 -m eval.run_meta_eval`) to establish a baseline, then start Phase 2 (synthesis quality with CIAK scoring) for the 10 cross-domain questions.
+Restart expert-service to deploy the context budget changes (MAX_BELIEF_CONTEXT_CHARS, MAX_TOOL_RESULT_CHARS). Then verify 211K token errors stop occurring. The code is ready, just needs a process restart.
 
 ## Context
 
-- **ftl-reasons 0.3.0** installed, `rms 0.1.0` removed
-- **Colima disk**: ~48GB free after removing langfuse volumes
-- **Reflection prompt v3**: Only records beliefs when expert cited specific belief IDs, entry IDs, or sources. Tested working — uncited answers skipped, cited answers recorded.
-- **Routing eval smoke test results**: R32 ("deploy AAP on OpenShift") got P=1.0 R=0.5 F1=0.67 — meta-expert only asked aap-expert, missed openshift-expert. Arguably reasonable but eval correctly flags it.
-- **Project IDs**: meta-expert=`b3ba781a`, aap-expert=`a037a6a3`, rhel-expert=`6e82621f`, openshift-expert=`23c26c17`
-- **Eval plan**: 6-phase plan in `~/git/project-analyze-understanding/entries/2026/03/20/meta-expert-evaluation-plan.md`
-- **Latest commit**: `8b23a03` — Add meta-expert routing evaluation framework
+- **FD root cause confirmed**: 4 concurrent users peaked at 366 FDs; old 256 limit would crash. ~50 FDs per concurrent user.
+- **Context overflow**: Beliefs had no char budget (source chunks had 30K). Tool history (especially Snowflake results) accumulated unbounded across 3 iterative rounds. Fixed with per-source budgets.
+- **502 error handler working**: Saw `502 Bad Gateway` in logs instead of 500 traceback — confirms api/chat.py fix is live.
+- **Architecture decisions discussed**: Read-only stateless deployment on OpenShift, SQLite KB baked into container images, no chat logs needed (stateless is a feature).
+- **4000-question eval runs** are the stress test that exposed both FD and context issues.
+- **Pending from previous session**: Attribution prompt improvement (missing inline citations), auto-detect single mode for ollama models, fix langfuse in agents-python.

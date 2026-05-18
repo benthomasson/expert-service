@@ -1,15 +1,20 @@
 """Chat API endpoint with SSE streaming."""
 
 import json
-
+import logging
 from uuid import UUID, uuid4
 
+import anthropic
+import httpx
 from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from google.api_core import exceptions as google_exceptions
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text as sa_text
 
-from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream
+from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream, single_ask
+
+logger = logging.getLogger(__name__)
 from expert_service.db.connection import get_sync_session
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["chat"])
@@ -67,11 +72,21 @@ async def chat(project_id: UUID, data: ChatRequest):
 class AskRequest(BaseModel):
     question: str
     model: str = "claude-sonnet-4-6"
+    mode: str = "dual"  # "dual" (3-call merge) or "single" (1-call synthesis)
 
 
 @router.post("/ask")
 async def ask(project_id: UUID, data: AskRequest):
-    """Non-streaming dual-path answer. Returns complete JSON — designed for evals."""
-    allowed = _get_project_connectors(project_id)
-    return await dual_ask(project_id, data.model, data.question,
-                          allowed_connectors=allowed)
+    """Non-streaming answer. Mode: 'dual' (3-call merge) or 'single' (1-call synthesis)."""
+    try:
+        if data.mode == "single":
+            return await single_ask(project_id, data.model, data.question)
+        allowed = _get_project_connectors(project_id)
+        return await dual_ask(project_id, data.model, data.question,
+                              allowed_connectors=allowed)
+    except (httpx.HTTPError, anthropic.APIError, google_exceptions.GoogleAPIError, OSError, TimeoutError) as exc:
+        logger.exception("LLM call failed for project %s", project_id)
+        return JSONResponse(
+            status_code=502,
+            content={"error": "The language model is temporarily unavailable. Please try again."},
+        )
