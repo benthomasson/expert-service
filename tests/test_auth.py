@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
-from expert_service.auth import verify_auth, verify_auth_web, _LoginRedirect
+from expert_service.auth import verify_auth, verify_auth_or_public, verify_auth_web, _LoginRedirect
 from expert_service.rbac import Action, Role, UserInfo, has_permission, require_action
 
 
@@ -339,3 +339,80 @@ class TestUserInfo:
         assert Role.ADMIN == "admin"
         assert Role.EDITOR == "editor"
         assert Role.READER == "reader"
+
+
+# --- Public project access ---
+
+
+class TestPublicProjectAccess:
+    """verify_auth_or_public allows unauthenticated access to public projects."""
+
+    @staticmethod
+    def _make_public_app(public_value):
+        from unittest.mock import AsyncMock, MagicMock
+        from expert_service.db.connection import get_session
+
+        mock_row = MagicMock()
+        mock_row.public = public_value
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row if public_value is not None else None
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        app = FastAPI()
+        app.add_middleware(SessionMiddleware, secret_key="test-secret")
+        app.dependency_overrides[get_session] = lambda: mock_session
+
+        @app.get("/api/projects/{project_id}/data")
+        async def project_data(project_id: str, user: UserInfo = Depends(verify_auth_or_public)):
+            return {"identity": user.identity, "role": user.role}
+
+        return app
+
+    def test_public_project_allows_anonymous(self):
+        app = self._make_public_app(True)
+        client = TestClient(app)
+        with patch("expert_service.auth.settings") as mock_settings:
+            mock_settings.api_key = ""
+            mock_settings.google_client_id = "set"
+            resp = client.get("/api/projects/00000000-0000-0000-0000-000000000001/data")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["identity"] == "public"
+        assert body["role"] == "reader"
+
+    def test_private_project_requires_auth(self):
+        app = self._make_public_app(False)
+        client = TestClient(app)
+        with patch("expert_service.auth.settings") as mock_settings:
+            mock_settings.api_key = ""
+            mock_settings.google_client_id = "set"
+            resp = client.get("/api/projects/00000000-0000-0000-0000-000000000001/data")
+        assert resp.status_code == 401
+
+    def test_nonexistent_project_requires_auth(self):
+        app = self._make_public_app(None)
+        client = TestClient(app)
+        with patch("expert_service.auth.settings") as mock_settings:
+            mock_settings.api_key = ""
+            mock_settings.google_client_id = "set"
+            resp = client.get("/api/projects/00000000-0000-0000-0000-000000000099/data")
+        assert resp.status_code == 401
+
+    def test_public_project_with_api_key_gets_public_identity(self):
+        """Public check runs first — authenticated users on public projects get 'public' identity."""
+        app = self._make_public_app(True)
+        client = TestClient(app)
+        with patch("expert_service.auth.settings") as mock_settings:
+            mock_settings.api_key = "test-key"
+            mock_settings.google_client_id = "set"
+            resp = client.get(
+                "/api/projects/00000000-0000-0000-0000-000000000001/data",
+                headers={"Authorization": "Bearer test-key"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["identity"] == "public"
+        assert body["role"] == "reader"
