@@ -210,9 +210,10 @@ async def verify_auth_or_public(
     # Auth failed with 401 — check if this is a public project
     project_id = request.path_params.get("project_id")
     if project_id:
+        from uuid import UUID
         from expert_service.db.models import Project
         result = await session.execute(
-            select(Project.public).where(Project.id == project_id)
+            select(Project.public).where(Project.id == UUID(str(project_id)))
         )
         row = result.first()
         if row and row.public:
