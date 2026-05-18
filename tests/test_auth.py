@@ -401,8 +401,8 @@ class TestPublicProjectAccess:
             resp = client.get("/api/projects/00000000-0000-0000-0000-000000000099/data")
         assert resp.status_code == 401
 
-    def test_public_project_with_api_key_gets_public_identity(self):
-        """Public check runs first — authenticated users on public projects get 'public' identity."""
+    def test_public_project_with_api_key_preserves_identity(self):
+        """Authenticated users on public projects keep their real identity."""
         app = self._make_public_app(True)
         client = TestClient(app)
         with patch("expert_service.auth.settings") as mock_settings:
@@ -414,5 +414,5 @@ class TestPublicProjectAccess:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["identity"] == "public"
-        assert body["role"] == "reader"
+        assert body["identity"] == "api"
+        assert body["role"] == "admin"

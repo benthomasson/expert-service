@@ -201,7 +201,13 @@ async def verify_auth_or_public(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     session: AsyncSession = Depends(get_session),
 ) -> UserInfo:
-    """Allow unauthenticated access to public projects; require auth otherwise."""
+    """Try auth first (preserving real identity); fall back to public access."""
+    try:
+        return await verify_auth(request, credentials, session)
+    except HTTPException as e:
+        if e.status_code != 401:
+            raise
+    # Auth failed with 401 — check if this is a public project
     project_id = request.path_params.get("project_id")
     if project_id:
         from sqlalchemy import text as sa_text
@@ -214,7 +220,7 @@ async def verify_auth_or_public(
             user = UserInfo(identity="public", role=Role.READER)
             request.state.user = user
             return user
-    return await verify_auth(request, credentials, session)
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 class _LoginRedirect(Exception):
