@@ -1,13 +1,16 @@
 """Chat API endpoint with SSE streaming."""
 
 import json
+import logging
 
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text as sa_text
+
+logger = logging.getLogger(__name__)
 
 from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream, single_ask
 from expert_service.db.connection import get_sync_session
@@ -73,8 +76,15 @@ class AskRequest(BaseModel):
 @router.post("/ask")
 async def ask(project_id: UUID, data: AskRequest):
     """Non-streaming answer. Mode: 'dual' (3-call merge) or 'single' (1-call synthesis)."""
-    if data.mode == "single":
-        return await single_ask(project_id, data.model, data.question)
-    allowed = _get_project_connectors(project_id)
-    return await dual_ask(project_id, data.model, data.question,
-                          allowed_connectors=allowed)
+    try:
+        if data.mode == "single":
+            return await single_ask(project_id, data.model, data.question)
+        allowed = _get_project_connectors(project_id)
+        return await dual_ask(project_id, data.model, data.question,
+                              allowed_connectors=allowed)
+    except Exception:
+        logger.exception("LLM call failed for project %s", project_id)
+        return JSONResponse(
+            status_code=502,
+            content={"error": "The language model is temporarily unavailable. Please try again."},
+        )

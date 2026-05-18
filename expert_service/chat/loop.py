@@ -21,6 +21,12 @@ from expert_service.rms import api as rms_api
 
 logger = logging.getLogger(__name__)
 
+# Context budget constants
+MAX_CHUNK_CHARS = 2000  # Truncate individual source chunks
+MAX_CONTEXT_CHARS = 30000  # Total source chunk context budget (~7500 tokens)
+MAX_BELIEF_CONTEXT_CHARS = 30000  # Total belief context budget (~7500 tokens)
+MAX_TOOL_RESULT_CHARS = 10000  # Truncate individual tool/connector results
+
 
 def _langfuse_config() -> dict:
     """Return a LangChain config dict with langfuse callbacks if configured."""
@@ -281,9 +287,18 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
             belief_rows = sorted(belief_rows, key=lambda r: _idf_score(r["text"], idfs), reverse=True)
 
     belief_rows = belief_rows[:limit]
-    context = "\n".join(
-        f"[{r.get('truth_value', 'IN')}] {r['id']} — {r['text']}" for r in belief_rows
-    )
+    parts = []
+    total = 0
+    included_rows = []
+    for r in belief_rows:
+        line = f"[{r.get('truth_value', 'IN')}] {r['id']} — {r['text']}"
+        if total + len(line) > MAX_BELIEF_CONTEXT_CHARS:
+            break
+        parts.append(line)
+        total += len(line)
+        included_rows.append(r)
+    context = "\n".join(parts)
+    belief_rows = included_rows
     sources = []
     for r in belief_rows:
         rid = r["id"]
@@ -406,10 +421,6 @@ async def chat_stream(
 
 
 # --- Dual-path architecture ---
-
-MAX_CHUNK_CHARS = 2000  # Truncate individual chunks
-MAX_CONTEXT_CHARS = 30000  # Total context budget (~7500 tokens)
-
 
 def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tuple[str, list[SourceRef]]:
     """FTS search over source_chunks with IDF re-ranking.
@@ -652,10 +663,12 @@ async def _tms_answer_iterative(
     for iteration in range(MAX_TMS_ITERATIONS):
         history_section = ""
         if tool_history:
-            parts = [
-                f"### Tool call: {e['tool']}(\"{e['query']}\")\n\n{e['result']}"
-                for e in tool_history
-            ]
+            parts = []
+            for e in tool_history:
+                result = e['result']
+                if len(result) > MAX_TOOL_RESULT_CHARS:
+                    result = result[:MAX_TOOL_RESULT_CHARS] + "\n[...truncated]"
+                parts.append(f"### Tool call: {e['tool']}(\"{e['query']}\")\n\n{result}")
             history_section = "\n\n## Additional search results\n\n" + "\n\n---\n\n".join(parts)
 
         if iteration == MAX_TMS_ITERATIONS - 1:
@@ -693,6 +706,8 @@ async def _tms_answer_iterative(
                         iteration + 1, connector, q)
             result = await query_data(q, connector_name=connector,
                                       allowed=allowed_connectors)
+            if len(result) > MAX_TOOL_RESULT_CHARS:
+                result = result[:MAX_TOOL_RESULT_CHARS] + "\n[...truncated]"
             tool_history.append({"tool": f"query_data({connector or 'all'})",
                                  "query": q, "result": result})
             connector_label = (connector or "data").title()
