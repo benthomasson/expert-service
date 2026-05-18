@@ -210,10 +210,9 @@ async def verify_auth_or_public(
     # Auth failed with 401 — check if this is a public project
     project_id = request.path_params.get("project_id")
     if project_id:
-        from sqlalchemy import text as sa_text
+        from expert_service.db.models import Project
         result = await session.execute(
-            sa_text("SELECT public FROM projects WHERE id = :pid"),
-            {"pid": str(project_id)},
+            select(Project.public).where(Project.id == project_id)
         )
         row = result.first()
         if row and row.public:
