@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import uvicorn
-from fastapi import FastAPI, Depends, Form, Request
+from fastapi import FastAPI, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, text as sa_text
@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
 from expert_service.api import projects, data, ask
-from expert_service.auth import router as auth_router, verify_auth, verify_auth_or_public, verify_auth_web, _LoginRedirect
+from expert_service.auth import router as auth_router, security, verify_auth, verify_auth_or_public, verify_auth_web, _LoginRedirect
+from fastapi.security import HTTPAuthorizationCredentials
 from expert_service.config import settings
 from expert_service.db.connection import get_session, init_db
 from expert_service.db.models import Assessment, Entry, Project, Source
@@ -105,6 +106,28 @@ async def version():
     from expert_service import __version__, _resolve_git_hash
     return {"version": __version__, "git_hash": _resolve_git_hash()}
 
+
+# Public project name resolution (must be before projects.router to avoid
+# /api/projects/{project_id} matching "resolve" as a project_id)
+@app.get("/api/projects/resolve")
+async def resolve_project_name(
+    name: str,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    session: AsyncSession = Depends(get_session),
+):
+    """Resolve a project name to its ID. No auth needed for public projects."""
+    result = await session.execute(
+        select(Project.id, Project.public).where(Project.name == name)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+    if row.public:
+        return {"id": str(row.id), "name": name, "public": True}
+    # Private project — require auth
+    await verify_auth(request, credentials, session)
+    return {"id": str(row.id), "name": name, "public": False}
 
 # API routes (protected by auth)
 app.include_router(projects.router, dependencies=[Depends(verify_auth)])
