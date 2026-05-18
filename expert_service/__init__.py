@@ -1,4 +1,4 @@
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Git commit hash — set at build time by hatch hook, or resolved at runtime.
 __git_hash__ = ""

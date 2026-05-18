@@ -37,7 +37,7 @@ async def lifespan(app):
     init_db()
     yield
 
-app = FastAPI(title="Expert Service", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Expert Service", version="0.3.0", lifespan=lifespan)
 
 # Session middleware for OAuth cookie sessions
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
