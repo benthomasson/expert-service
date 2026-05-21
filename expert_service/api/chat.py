@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text as sa_text
 
 from expert_service.chat.loop import chat_stream, dual_ask, dual_chat_stream, single_ask
+from expert_service.config import settings
 
 logger = logging.getLogger(__name__)
 from expert_service.db.connection import get_sync_session
@@ -78,6 +79,8 @@ class AskRequest(BaseModel):
 @router.post("/ask")
 async def ask(project_id: UUID, data: AskRequest):
     """Non-streaming answer. Mode: 'dual' (3-call merge) or 'single' (1-call synthesis)."""
+    model = data.model or settings.default_model
+    logger.info("ask project=%s model=%s mode=%s", project_id, model, data.mode)
     try:
         if data.mode == "single":
             return await single_ask(project_id, data.model, data.question)
@@ -85,8 +88,11 @@ async def ask(project_id: UUID, data: AskRequest):
         return await dual_ask(project_id, data.model, data.question,
                               allowed_connectors=allowed)
     except (httpx.HTTPError, anthropic.APIError, google_exceptions.GoogleAPIError, OSError, TimeoutError) as exc:
-        logger.exception("LLM call failed for project %s", project_id)
+        detail = f"model={model}"
+        if model.startswith("ollama:"):
+            detail += f" host={settings.ollama_host}"
+        logger.exception("LLM call failed for project %s (%s)", project_id, detail)
         return JSONResponse(
             status_code=502,
-            content={"error": "The language model is temporarily unavailable. Please try again."},
+            content={"error": f"The language model is temporarily unavailable ({detail}). Please try again."},
         )

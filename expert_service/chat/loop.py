@@ -177,7 +177,7 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
     are always included.
     """
     if not sources:
-        return "", {}
+        return ""
 
     # Filter to cited sources if we have response text
     if response_text:
