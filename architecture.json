@@ -233,5 +233,11 @@
       "from": "search_api_out",
       "to": "reasons_db_query"
     }
-  ]
+  ],
+  "view": {
+    "translate_x": 886.4362370000001,
+    "translate_y": 451.91090800000006,
+    "scale": 0.5314410000000002,
+    "theme": "light"
+  }
 }
