@@ -66,7 +66,8 @@
       "position": [
         -983,
         34
-      ]
+      ],
+      "technology": "Firefox"
     },
     {
       "name": "expert_cli",
@@ -74,7 +75,8 @@
       "position": [
         -969,
         -246
-      ]
+      ],
+      "technology": "Terminal"
     },
     {
       "name": "mcp_server",
@@ -82,7 +84,8 @@
       "position": [
         -988,
         283
-      ]
+      ],
+      "technology": "MCP"
     },
     {
       "name": "expert_service",
@@ -136,7 +139,7 @@
         531,
         -520
       ],
-      "technology": "REST"
+      "technology": "Vertex AI"
     },
     {
       "name": "ollama",
@@ -145,7 +148,7 @@
         532,
         -288
       ],
-      "technology": "REST"
+      "technology": "Ollama"
     },
     {
       "name": "snowflake",
@@ -154,7 +157,7 @@
         503,
         598
       ],
-      "technology": "REST"
+      "technology": "Snowflake"
     },
     {
       "name": "langfuse",
@@ -163,7 +166,7 @@
         -260,
         604
       ],
-      "technology": "REST"
+      "technology": "Langfuse"
     },
     {
       "name": "reasons_db",
