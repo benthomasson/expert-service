@@ -182,16 +182,18 @@ def export_markdown(project_id: UUID, status: str | None = None) -> str:
 
 def search(project_id: UUID, query: str) -> dict:
     """Search nodes by text using full-text search."""
-    if _is_sqlite():
-        import reasons_lib.api as rlib
-        result = rlib.search(query, db_path=_db_path(project_id), format="dict")
-        # reasons_lib.api.search returns str for non-dict formats
-        if isinstance(result, dict):
-            return {"results": result.get("results", []), "count": result.get("count", 0)}
+    terms = [t.lower() for t in query.split() if len(t) > 1]
+    if not terms:
         return {"results": [], "count": 0}
-    with _api(project_id) as api:
-        result = api.search(query, format="dict")
-    return {"results": result["results"], "count": result["count"]}
+    nodes_result = list_nodes(project_id)
+    nodes = nodes_result.get("nodes", [])
+    results = []
+    for n in nodes:
+        text_lower = n.get("text", "").lower()
+        id_lower = n.get("id", "").lower()
+        if any(t in text_lower or t in id_lower for t in terms):
+            results.append(n)
+    return {"results": results, "count": len(results)}
 
 
 def list_nodes(
