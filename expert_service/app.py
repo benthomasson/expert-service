@@ -8,7 +8,7 @@ from uuid import UUID
 
 import uvicorn
 from fastapi import FastAPI, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +95,14 @@ def _open_fds() -> dict:
 @app.get("/health")
 async def health():
     return {"status": "ok", "llm": settings.llm_enabled, "fds": _open_fds()}
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    return PlainTextResponse(
+        "User-agent: *\nAllow: /public/\nDisallow: /api/\nDisallow: /projects/\n",
+        media_type="text/plain",
+    )
 
 
 # Auth routes (login/callback/logout — always public)
