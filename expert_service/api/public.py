@@ -253,6 +253,9 @@ async def beliefs_in_markdown(project_name: str, session: AsyncSession = Depends
 async def beliefs_in_json(project_name: str, session: AsyncSession = Depends(get_session)):
     project = await _resolve_public_project(project_name, session)
     result = await asyncio.to_thread(rms_api.list_nodes, project.id, status="IN")
+    prefix = f"/public/{project_name}"
+    for n in result.get("nodes", []):
+        n["url"] = f"{prefix}/belief/{n['id']}.json"
     return JSONResponse(
         result,
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
@@ -274,6 +277,9 @@ async def beliefs_markdown(project_name: str, session: AsyncSession = Depends(ge
 async def beliefs_json(project_name: str, session: AsyncSession = Depends(get_session)):
     project = await _resolve_public_project(project_name, session)
     result = await asyncio.to_thread(rms_api.list_nodes, project.id)
+    prefix = f"/public/{project_name}"
+    for n in result.get("nodes", []):
+        n["url"] = f"{prefix}/belief/{n['id']}.json"
     return JSONResponse(
         result,
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
