@@ -14,7 +14,7 @@ from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from expert_service.api import projects, data, ask
+from expert_service.api import projects, data, ask, public
 from expert_service.auth import router as auth_router, security, verify_auth, verify_auth_or_public, verify_auth_web, _LoginRedirect
 from fastapi.security import HTTPAuthorizationCredentials
 from expert_service.config import settings
@@ -128,6 +128,9 @@ async def resolve_project_name(
     # Private project — require auth
     await verify_auth(request, credentials, session)
     return {"id": str(row.id), "name": name, "public": False}
+
+# Public project views (no auth — gated by project.public flag)
+app.include_router(public.router)
 
 # API routes (protected by auth)
 app.include_router(projects.router, dependencies=[Depends(verify_auth)])

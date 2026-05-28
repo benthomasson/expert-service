@@ -155,6 +155,31 @@ def add_nogood(project_id: UUID, node_ids: list[str]) -> dict:
         return api.add_nogood(node_ids)
 
 
+def export_markdown(project_id: UUID, status: str | None = None) -> str:
+    """Export the belief network as markdown, optionally filtered by status."""
+    if _is_sqlite() and status is None:
+        import reasons_lib.api as rlib
+        return rlib.export_markdown(db_path=_db_path(project_id))
+    nodes_result = list_nodes(project_id, status=status)
+    nodes = nodes_result.get("nodes", [])
+    nodes.sort(key=lambda n: (n.get("truth_value") != "IN", n.get("id", "")))
+    lines = [
+        "# Belief Registry",
+        "",
+        "## Claims",
+        "",
+    ]
+    for n in nodes:
+        tv = n.get("truth_value", "IN")
+        ntype = "OBSERVATION"
+        lines.append(f"### {n['id']} [{tv}] {ntype}")
+        lines.append(n.get("text", ""))
+        if n.get("source"):
+            lines.append(f"- Source: {n['source']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def search(project_id: UUID, query: str) -> dict:
     """Search nodes by text using full-text search."""
     if _is_sqlite():
