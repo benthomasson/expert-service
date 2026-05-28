@@ -156,6 +156,67 @@ async def delete_project(project_id: UUID, session: AsyncSession = Depends(get_s
     return {"status": "deleted"}
 
 
+@router.post("/{project_id}/import-reasons")
+async def upsert_reasons(
+    project_id: UUID,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Upsert beliefs from a reasons.db file into an existing project.
+
+    Nodes that already exist are skipped (preserving API-added beliefs).
+    New nodes and their justifications are added.
+    """
+    result = await session.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        content = await file.read()
+        tmp.write(content)
+
+    try:
+        from reasons_lib.storage import Storage
+        store = Storage(str(tmp_path))
+        network = store.load()
+        store.close()
+
+        added = 0
+        skipped = 0
+
+        def _do_upsert():
+            nonlocal added, skipped
+            for node in network.nodes.values():
+                try:
+                    rms_api.add_node(
+                        project_id, node.id, node.text,
+                        source=node.source or "",
+                    )
+                    if node.truth_value == "OUT":
+                        rms_api.retract_node(project_id, node.id)
+                    added += 1
+                except (ValueError, Exception):
+                    skipped += 1
+
+        await asyncio.to_thread(_do_upsert)
+        invalidate_meta_cache()
+
+        return {
+            "project_id": str(project_id),
+            "added": added,
+            "skipped": skipped,
+            "total_in_file": len(network.nodes),
+        }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail=f"Invalid reasons.db: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.post("/import-reasons")
 async def import_reasons(
     name: str = Form(...),
