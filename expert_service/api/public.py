@@ -345,6 +345,25 @@ def _belief_to_html(node_id: str, detail: dict, explanation: dict, prefix: str) 
     return "\n".join(parts)
 
 
+@router.get("/belief/{node_id}.json")
+async def get_belief_json(
+    project_name: str,
+    node_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await _resolve_public_project(project_name, session)
+    try:
+        detail = await asyncio.to_thread(rms_api.show_node, project.id, node_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Belief not found")
+    explanation = await asyncio.to_thread(rms_api.explain_node, project.id, node_id)
+    detail["explanation"] = explanation
+    return JSONResponse(
+        detail,
+        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
+    )
+
+
 @router.get("/belief/{node_id}", response_class=HTMLResponse)
 async def get_belief(
     project_name: str,
@@ -374,25 +393,6 @@ async def get_belief(
     )
     return HTMLResponse(
         html,
-        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
-    )
-
-
-@router.get("/belief/{node_id}.json")
-async def get_belief_json(
-    project_name: str,
-    node_id: str,
-    session: AsyncSession = Depends(get_session),
-):
-    project = await _resolve_public_project(project_name, session)
-    try:
-        detail = await asyncio.to_thread(rms_api.show_node, project.id, node_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Belief not found")
-    explanation = await asyncio.to_thread(rms_api.explain_node, project.id, node_id)
-    detail["explanation"] = explanation
-    return JSONResponse(
-        detail,
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
     )
 
