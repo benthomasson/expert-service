@@ -110,6 +110,40 @@ async def get_project(project_id: UUID, session: AsyncSession = Depends(get_sess
     )
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    domain: str | None = None
+    config: dict | None = None
+    public: bool | None = None
+
+
+@router.patch("/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: UUID, data: ProjectUpdate, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    update_fields = data.model_dump(exclude_unset=True)
+    for field, value in update_fields.items():
+        setattr(project, field, value)
+    await session.commit()
+    await session.refresh(project)
+    if "name" in update_fields or "domain" in update_fields:
+        invalidate_meta_cache()
+    sc, ec, cc = await _project_counts(session, project.id)
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        domain=project.domain,
+        config=project.config or {},
+        public=project.public,
+        created_at=project.created_at.isoformat(),
+        source_count=sc,
+        entry_count=ec,
+        belief_count=cc,
+    )
+
+
 @router.delete("/{project_id}")
 async def delete_project(project_id: UUID, session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Project).where(Project.id == project_id))
