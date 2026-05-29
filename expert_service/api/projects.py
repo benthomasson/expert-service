@@ -156,13 +156,45 @@ async def delete_project(project_id: UUID, session: AsyncSession = Depends(get_s
     return {"status": "deleted"}
 
 
+def _load_network_from_upload(content: bytes, filename: str):
+    """Load a reasons_lib Network from an uploaded file (reasons.db or network.json)."""
+    import json
+
+    if filename.endswith(".json"):
+        data = json.loads(content)
+        nodes = data.get("nodes", {})
+        from types import SimpleNamespace
+        network_nodes = {}
+        for node_id, node_data in nodes.items():
+            network_nodes[node_id] = SimpleNamespace(
+                id=node_id,
+                text=node_data.get("text", ""),
+                truth_value=node_data.get("truth_value", "IN"),
+                source=node_data.get("source", ""),
+                justifications=node_data.get("justifications", []),
+            )
+        return SimpleNamespace(nodes=network_nodes)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        tmp.write(content)
+    try:
+        from reasons_lib.storage import Storage
+        store = Storage(str(tmp_path))
+        network = store.load()
+        store.close()
+        return network
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 @router.post("/{project_id}/import-reasons")
 async def upsert_reasons(
     project_id: UUID,
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
 ):
-    """Upsert beliefs from a reasons.db file into an existing project.
+    """Upsert beliefs from a reasons.db or network.json file into an existing project.
 
     Nodes that already exist are skipped (preserving API-added beliefs).
     New nodes and their justifications are added.
@@ -172,16 +204,9 @@ async def upsert_reasons(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-        content = await file.read()
-        tmp.write(content)
-
+    content = await file.read()
     try:
-        from reasons_lib.storage import Storage
-        store = Storage(str(tmp_path))
-        network = store.load()
-        store.close()
+        network = _load_network_from_upload(content, file.filename or "")
 
         added = 0
         skipped = 0
@@ -212,9 +237,7 @@ async def upsert_reasons(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
-        raise HTTPException(status_code=400, detail=f"Invalid reasons.db: {e}")
-    finally:
-        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Invalid file: {e}")
 
 
 @router.post("/import-reasons")
