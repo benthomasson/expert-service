@@ -172,21 +172,27 @@ def _inject_belief_links(body: str, prefix: str) -> str:
     return _append_topic_links(body, prefix)
 
 
-def _append_topic_links(body: str, prefix: str) -> str:
-    node_ids = re.findall(r'^### \[([a-z0-9][a-z0-9._:-]*)\]', body, flags=re.MULTILINE)
-    if not node_ids:
-        node_ids = re.findall(r'^### ([a-z0-9][a-z0-9._:-]*)', body, flags=re.MULTILINE)
+def _extract_topics(node_ids: list[str], limit: int = 20) -> list[dict]:
+    """Extract topics from node IDs by word frequency. Returns [{topic, count}]."""
     word_counts: dict[str, int] = {}
     for nid in node_ids:
         for word in re.split(r'[-._:]', nid):
             if word and len(word) > 2 and word not in _STOP_WORDS:
                 word_counts[word] = word_counts.get(word, 0) + 1
-    topics = sorted(word_counts, key=lambda w: (-word_counts[w], w))[:20]
+    topics = sorted(word_counts, key=lambda w: (-word_counts[w], w))[:limit]
+    return [{"topic": t, "count": word_counts[t]} for t in topics]
+
+
+def _append_topic_links(body: str, prefix: str) -> str:
+    node_ids = re.findall(r'^### \[([a-z0-9][a-z0-9._:-]*)\]', body, flags=re.MULTILINE)
+    if not node_ids:
+        node_ids = re.findall(r'^### ([a-z0-9][a-z0-9._:-]*)', body, flags=re.MULTILINE)
+    topics = _extract_topics(node_ids)
     if not topics:
         return body
     lines = ["", "## Topics", ""]
-    for topic in topics:
-        lines.append(f"- [{topic}]({prefix}/search?q={topic}) ({word_counts[topic]})")
+    for t in topics:
+        lines.append(f"- [{t['topic']}]({prefix}/search?q={t['topic']}) ({t['count']})")
     lines.append("")
     return body + "\n".join(lines)
 
@@ -411,6 +417,37 @@ async def get_belief(
     )
     return HTMLResponse(
         html,
+        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
+    )
+
+
+@router.get("/intro.json")
+async def intro_json(
+    project_name: str,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await _resolve_public_project(project_name, session)
+    belief_count = await asyncio.to_thread(rms_api.count_beliefs, project.id, "IN")
+    nodes_result = await asyncio.to_thread(rms_api.list_nodes, project.id, status="IN")
+    node_ids = [n["id"] for n in nodes_result.get("nodes", [])]
+    prefix = f"/public/{project_name}"
+    topics = _extract_topics(node_ids, limit=30)
+    for t in topics:
+        t["search_url"] = f"{prefix}/search?q={t['topic']}"
+    return JSONResponse(
+        {
+            "name": project.name,
+            "domain": project.domain,
+            "belief_count": belief_count,
+            "topics": topics,
+            "endpoints": {
+                "beliefs": f"{prefix}/beliefs.json",
+                "beliefs_in": f"{prefix}/beliefs-in.json",
+                "search": f"{prefix}/search?q={{query}}",
+                "belief": f"{prefix}/belief/{{node_id}}.json",
+                "intro": f"{prefix}/intro.json",
+            },
+        },
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
     )
 
