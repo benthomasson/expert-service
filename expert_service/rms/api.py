@@ -63,6 +63,66 @@ def add_node(
                             label=label, source=source, example=example)
 
 
+def update_node(
+    project_id: UUID,
+    node_id: str,
+    text: str | None = None,
+    source: str | None = None,
+    example: str | None = None,
+) -> dict:
+    """Update mutable fields on an existing node."""
+    if _is_sqlite():
+        from reasons_lib.storage import Storage
+        db = _db_path(project_id)
+        store = Storage(db)
+        net = store.load()
+        if node_id not in net.nodes:
+            store.close()
+            raise KeyError(f"Node '{node_id}' not found")
+        node = net.nodes[node_id]
+        if text is not None:
+            node.text = text
+        if source is not None:
+            node.source = source
+        if example is not None:
+            if node.metadata is None:
+                node.metadata = {}
+            node.metadata["example"] = example
+        store.save(net)
+        store.close()
+        return {"node_id": node_id, "updated": True}
+    import json as _json
+    from expert_service.db.connection import get_sync_session
+    from sqlalchemy import text as sa_text
+    with get_sync_session() as session:
+        row = session.execute(
+            sa_text("SELECT metadata FROM rms_nodes WHERE project_id = :pid AND id = :nid"),
+            {"pid": str(project_id), "nid": node_id},
+        ).fetchone()
+        if not row:
+            raise KeyError(f"Node '{node_id}' not found")
+        sets = []
+        params: dict = {"pid": str(project_id), "nid": node_id}
+        if text is not None:
+            sets.append("text = :text")
+            params["text"] = text
+        if source is not None:
+            sets.append("source = :source")
+            params["source"] = source
+        if example is not None:
+            meta = _json.loads(row[0]) if row[0] else {}
+            meta["example"] = example
+            sets.append("metadata = :metadata")
+            params["metadata"] = _json.dumps(meta)
+        if sets:
+            session.execute(
+                sa_text(f"UPDATE rms_nodes SET {', '.join(sets)} WHERE project_id = :pid AND id = :nid"),
+                params,
+            )
+            session.commit()
+        return {"node_id": node_id, "updated": True}
+
+
 def retract_node(project_id: UUID, node_id: str) -> dict:
     """Retract a node and cascade."""
     if _is_sqlite():

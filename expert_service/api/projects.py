@@ -210,23 +210,31 @@ async def upsert_reasons(
         network = _load_network_from_upload(content, file.filename or "")
 
         added = 0
-        skipped = 0
+        updated = 0
 
         def _do_upsert():
-            nonlocal added, skipped
+            nonlocal added, updated
             for node in network.nodes.values():
+                meta = getattr(node, "metadata", {}) or {}
                 try:
-                    meta = getattr(node, "metadata", {}) or {}
                     rms_api.add_node(
                         project_id, node.id, node.text,
                         source=node.source or "",
                         example=meta.get("example"),
                     )
-                    if node.truth_value == "OUT":
-                        rms_api.retract_node(project_id, node.id)
                     added += 1
-                except (ValueError, Exception):
-                    skipped += 1
+                except ValueError:
+                    rms_api.update_node(
+                        project_id, node.id,
+                        text=node.text,
+                        source=node.source or "",
+                        example=meta.get("example"),
+                    )
+                    updated += 1
+                if node.truth_value == "OUT":
+                    rms_api.retract_node(project_id, node.id)
+                else:
+                    rms_api.assert_node(project_id, node.id)
 
         await asyncio.to_thread(_do_upsert)
         invalidate_meta_cache()
@@ -234,7 +242,7 @@ async def upsert_reasons(
         return {
             "project_id": str(project_id),
             "added": added,
-            "skipped": skipped,
+            "updated": updated,
             "total_in_file": len(network.nodes),
         }
     except Exception as e:
