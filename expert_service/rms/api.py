@@ -242,11 +242,11 @@ def export_markdown(project_id: UUID, status: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def search(project_id: UUID, query: str, limit: int = 20) -> dict:
-    """Search nodes by text. Returns up to *limit* results (default 20)."""
+def search(project_id: UUID, query: str, limit: int = 20, offset: int = 0) -> dict:
+    """Search nodes by text. Returns up to *limit* results starting at *offset*."""
     terms = [t.lower() for t in query.split() if len(t) > 1]
     if not terms:
-        return {"results": [], "count": 0}
+        return {"results": [], "count": 0, "limit": limit, "offset": offset}
     nodes_result = list_nodes(project_id)
     nodes = nodes_result.get("nodes", [])
     results = []
@@ -259,9 +259,8 @@ def search(project_id: UUID, query: str, limit: int = 20) -> dict:
             results.append(n)
     results.sort(key=lambda n: -n.pop("_score"))
     total = len(results)
-    if limit:
-        results = results[:limit]
-    return {"results": results, "count": total}
+    results = results[offset:offset + limit] if limit else results[offset:]
+    return {"results": results, "count": total, "limit": limit, "offset": offset}
 
 
 def list_nodes(

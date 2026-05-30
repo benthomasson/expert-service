@@ -420,10 +420,11 @@ async def search_beliefs(
     project_name: str,
     q: str,
     limit: int = 20,
+    offset: int = 0,
     session: AsyncSession = Depends(get_session),
 ):
     project = await _resolve_public_project(project_name, session)
-    result = await asyncio.to_thread(rms_api.search, project.id, q, limit=limit)
+    result = await asyncio.to_thread(rms_api.search, project.id, q, limit=limit, offset=offset)
     return JSONResponse(
         result,
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
