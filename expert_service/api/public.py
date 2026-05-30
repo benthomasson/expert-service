@@ -160,6 +160,9 @@ _STOP_WORDS = {
     "for", "of", "and", "or", "not", "as", "by", "via", "can", "with",
     "from", "than", "that", "this", "be", "has", "have", "it", "its",
     "no", "do", "if", "so", "up", "out", "all", "but", "get", "set",
+    "only", "per", "use", "may", "one", "two", "new", "any", "each",
+    "must", "when", "how", "also", "into", "over", "more", "both",
+    "same", "own", "used", "using", "based", "does", "then",
 }
 
 
