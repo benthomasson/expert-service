@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Public Experts — Expert Service{% endblock %}
+{% block content %}
+<hgroup>
+    <h1>Public Experts</h1>
+    <p>Domain expert knowledge bases — open access</p>
+</hgroup>
+
+{% if experts %}
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;">
+    {% for e in experts %}
+    <article>
+        <header><strong>{{ e.name }}</strong></header>
+        {% if e.domain %}<p>{{ e.domain }}</p>{% endif %}
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="value">{{ e.belief_count }}</div>
+                <div class="label">Beliefs (IN)</div>
+            </div>
+        </div>
+        <footer>
+            <a href="/public/{{ e.name }}/beliefs" role="button" class="outline">View</a>
+            <a href="/public/{{ e.name }}/beliefs.json" role="button" class="outline secondary" style="margin-left: 0.5rem;">JSON</a>
+            <a href="/public/{{ e.name }}/beliefs.md" role="button" class="outline secondary" style="margin-left: 0.5rem;">MD</a>
+        </footer>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<p>No public experts available yet.</p>
+{% endif %}
+{% endblock %}

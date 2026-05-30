@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import html as html_mod
 import re
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +23,9 @@ from expert_service.db.models import Project
 from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/public/{project_name}", tags=["public"])
+landing_router = APIRouter(prefix="/public", tags=["public"])
+
+_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 _CACHE_MAX_AGE = 300  # 5 minutes
 
@@ -413,5 +418,28 @@ async def search_beliefs(
     result = await asyncio.to_thread(rms_api.search, project.id, q)
     return JSONResponse(
         result,
+        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
+    )
+
+
+# --- Landing page ---
+
+@landing_router.get("/", response_class=HTMLResponse)
+async def public_landing(request: Request, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(Project).where(Project.public == True).order_by(Project.name)
+    )
+    projects = result.scalars().all()
+    experts = []
+    for p in projects:
+        belief_count = await asyncio.to_thread(rms_api.count_beliefs, p.id, "IN")
+        experts.append({
+            "name": p.name,
+            "domain": p.domain,
+            "belief_count": belief_count,
+        })
+    return _templates.TemplateResponse(
+        request, "public/index.html",
+        {"experts": experts},
         headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
     )

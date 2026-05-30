@@ -138,6 +138,7 @@ async def resolve_project_name(
     return {"id": str(row.id), "name": name, "public": False}
 
 # Public project views (no auth — gated by project.public flag)
+app.include_router(public.landing_router)
 app.include_router(public.router)
 
 # API routes (protected by auth)
