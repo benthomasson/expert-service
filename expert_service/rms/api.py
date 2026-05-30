@@ -50,15 +50,17 @@ def add_node(
     unless: str = "",
     label: str = "",
     source: str = "",
+    example: str | None = None,
 ) -> dict:
     """Add a node to the project's RMS network."""
     if _is_sqlite():
         import reasons_lib.api as rlib
         return rlib.add_node(node_id, text, sl=sl, cp=cp, unless=unless,
-                             label=label, source=source, db_path=_db_path(project_id))
+                             label=label, source=source, example=example,
+                             db_path=_db_path(project_id))
     with _api(project_id) as api:
         return api.add_node(node_id, text, sl=sl, cp=cp, unless=unless,
-                            label=label, source=source)
+                            label=label, source=source, example=example)
 
 
 def retract_node(project_id: UUID, node_id: str) -> dict:

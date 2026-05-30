@@ -172,6 +172,7 @@ def _load_network_from_upload(content: bytes, filename: str):
                 truth_value=node_data.get("truth_value", "IN"),
                 source=node_data.get("source", ""),
                 justifications=node_data.get("justifications", []),
+                metadata=node_data.get("metadata", {}),
             )
         return SimpleNamespace(nodes=network_nodes)
 
@@ -215,9 +216,11 @@ async def upsert_reasons(
             nonlocal added, skipped
             for node in network.nodes.values():
                 try:
+                    meta = getattr(node, "metadata", {}) or {}
                     rms_api.add_node(
                         project_id, node.id, node.text,
                         source=node.source or "",
+                        example=meta.get("example"),
                     )
                     if node.truth_value == "OUT":
                         rms_api.retract_node(project_id, node.id)

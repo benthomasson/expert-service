@@ -310,6 +310,13 @@ def _belief_to_html(node_id: str, detail: dict, explanation: dict, prefix: str) 
         else:
             parts.append(f'<p><strong>Source:</strong> {html_mod.escape(source)}</p>')
 
+    # Example from metadata
+    metadata = detail.get("metadata") or {}
+    example = metadata.get("example", "")
+    if example:
+        parts.append('<h2>Example</h2>')
+        parts.append(f'<pre><code>{html_mod.escape(example)}</code></pre>')
+
     # Dependencies
     justifications = detail.get("justifications", [])
     if justifications:
