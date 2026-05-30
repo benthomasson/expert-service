@@ -18,10 +18,14 @@
                 <div class="label">Beliefs (IN)</div>
             </div>
         </div>
-        <footer>
+        <footer style="flex-wrap: wrap; gap: 0.5rem;">
             <a href="/public/{{ e.name }}/beliefs" role="button" class="outline">View</a>
-            <a href="/public/{{ e.name }}/beliefs.json" role="button" class="outline secondary" style="margin-left: 0.5rem;">JSON</a>
-            <a href="/public/{{ e.name }}/beliefs.md" role="button" class="outline secondary" style="margin-left: 0.5rem;">MD</a>
+            <a href="/public/{{ e.name }}/beliefs.json" role="button" class="outline secondary">JSON</a>
+            <a href="/public/{{ e.name }}/beliefs.md" role="button" class="outline secondary">MD</a>
+            <form action="/public/{{ e.name }}/search" method="get" style="display: inline-flex; gap: 0.25rem; margin: 0;">
+                <input type="text" name="q" placeholder="Search..." style="margin: 0; padding: 0.25rem 0.5rem; height: auto; width: 8rem;">
+                <button type="submit" class="outline secondary" style="margin: 0; padding: 0.25rem 0.5rem; height: auto;">Go</button>
+            </form>
         </footer>
     </article>
     {% endfor %}

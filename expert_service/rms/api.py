@@ -242,8 +242,8 @@ def export_markdown(project_id: UUID, status: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def search(project_id: UUID, query: str) -> dict:
-    """Search nodes by text using full-text search."""
+def search(project_id: UUID, query: str, limit: int = 20) -> dict:
+    """Search nodes by text. Returns up to *limit* results (default 20)."""
     terms = [t.lower() for t in query.split() if len(t) > 1]
     if not terms:
         return {"results": [], "count": 0}
@@ -253,9 +253,15 @@ def search(project_id: UUID, query: str) -> dict:
     for n in nodes:
         text_lower = n.get("text", "").lower()
         id_lower = n.get("id", "").lower()
-        if any(t in text_lower or t in id_lower for t in terms):
+        score = sum(1 for t in terms if t in text_lower or t in id_lower)
+        if score > 0:
+            n["_score"] = score
             results.append(n)
-    return {"results": results, "count": len(results)}
+    results.sort(key=lambda n: -n.pop("_score"))
+    total = len(results)
+    if limit:
+        results = results[:limit]
+    return {"results": results, "count": total}
 
 
 def list_nodes(
