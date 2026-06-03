@@ -75,7 +75,7 @@ async def auth_callback(request: Request, session: AsyncSession = Depends(get_se
     request.session.clear()
     request.session["user_email"] = email
     request.session["user_name"] = userinfo.get("name", email)
-    return RedirectResponse(url="/")
+    return RedirectResponse(url="/projects")
 
 
 @router.get("/logout")
