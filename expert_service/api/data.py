@@ -384,6 +384,7 @@ async def import_entries(
 
         # Auto-match entry to source by topic == slug
         if e.topic in source_map:
+            await session.flush()
             await session.execute(
                 insert(entry_sources).values(
                     entry_id=e.id,
