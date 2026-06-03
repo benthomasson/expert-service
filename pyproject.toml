@@ -1,6 +1,6 @@
 [project]
 name = "expert-service"
-version = "0.4.9"
+version = "0.5.0"
 description = "Web service for building domain expert knowledge bases"
 readme = "README.md"
 requires-python = ">=3.12"

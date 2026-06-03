@@ -27,7 +27,7 @@
     <nav class="container">
         <ul><li><a href="/" class="brand">Expert Service</a></li></ul>
         <ul>
-            <li><a href="/">Projects</a></li>
+            <li><a href="/projects">Projects</a></li>
             {% if llm_enabled %}<li><a href="/meta/chat">Meta-Expert</a></li>{% endif %}
             {% if request.state.user %}
             <li><small>{{ request.state.user.display_name or request.state.user.identity }}</small></li>

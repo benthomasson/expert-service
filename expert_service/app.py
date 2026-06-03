@@ -100,7 +100,7 @@ async def health():
 @app.get("/robots.txt", response_class=PlainTextResponse)
 async def robots_txt():
     return PlainTextResponse(
-        "User-agent: *\nAllow: /public/\nDisallow: /api/\nDisallow: /projects/\n",
+        "User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /projects/\n",
         media_type="text/plain",
     )
 
@@ -163,12 +163,31 @@ templates.env.globals["llm_enabled"] = settings.llm_enabled
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
-    """Projects list page."""
+async def home(request: Request, session: AsyncSession = Depends(get_session)):
+    """Public landing page — lists public experts, links to login."""
+    result = await session.execute(
+        select(Project).where(Project.public == True).order_by(Project.name)
+    )
+    projects = result.scalars().all()
+    experts = []
+    for p in projects:
+        belief_count = await asyncio.to_thread(rms_api.count_beliefs, p.id, "IN")
+        experts.append({
+            "name": p.name,
+            "domain": p.domain,
+            "belief_count": belief_count,
+        })
+    return templates.TemplateResponse(request, "home.html", {
+        "experts": experts,
+    })
+
+
+@app.get("/projects", response_class=HTMLResponse)
+async def projects_list(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
+    """Authenticated projects list page."""
     result = await session.execute(select(Project).order_by(Project.created_at.desc()))
     project_list = result.scalars().all()
 
-    # Get counts for each project
     projects_with_stats = []
     for p in project_list:
         source_count = await session.scalar(
