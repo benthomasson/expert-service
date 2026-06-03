@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from expert_service.chunking import chunk_markdown
 from expert_service.config import settings
 from expert_service.db.connection import get_session, get_sync_session
-from expert_service.db.models import Entry, Source, entry_sources
+from expert_service.db.models import Entry, Source, SourceChunk, entry_sources
 from expert_service.db.search import fts_clause
 from expert_service.rms import api as rms_api
 
@@ -329,23 +329,16 @@ async def import_sources(
             word_count=s.word_count,
         )
         session.add(source)
-        await session.flush()  # get source.id for chunks
+        await session.flush()
 
-        # Auto-chunk the source content
         for c in chunk_markdown(s.content):
-            await session.execute(
-                text(
-                    "INSERT INTO source_chunks (project_id, source_id, chunk_index, section, text) "
-                    "VALUES (:pid, :sid, :idx, :sec, :txt)"
-                ),
-                {
-                    "pid": str(project_id),
-                    "sid": str(source.id),
-                    "idx": c["chunk_index"],
-                    "sec": c["section"],
-                    "txt": c["text"],
-                },
-            )
+            session.add(SourceChunk(
+                project_id=project_id,
+                source_id=source.id,
+                chunk_index=c["chunk_index"],
+                section=c["section"],
+                text=c["text"],
+            ))
         imported += 1
 
     await session.commit()
