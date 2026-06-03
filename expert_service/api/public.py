@@ -316,6 +316,9 @@ def _belief_to_html(node_id: str, detail: dict, explanation: dict, prefix: str) 
     if source:
         if source_url:
             parts.append(f'<p><strong>Source:</strong> <a href="{html_mod.escape(source_url)}">{html_mod.escape(source)}</a></p>')
+        elif source.startswith("entries/") and source.endswith(".md"):
+            slug = source.rsplit("/", 1)[-1].removesuffix(".md")
+            parts.append(f'<p><strong>Source:</strong> <a href="{prefix}/search?q={html_mod.escape(slug)}">{html_mod.escape(source)}</a></p>')
         else:
             parts.append(f'<p><strong>Source:</strong> {html_mod.escape(source)}</p>')
 
