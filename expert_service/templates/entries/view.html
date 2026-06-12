@@ -26,6 +26,12 @@
 
 <div class="entry-meta">
     {{ entry.topic }}
+    {% if linked_sources %}
+    &middot; Original source:
+    {% for s in linked_sources %}
+    <a href="/api/projects/{{ project.id }}/data/sources/{{ s.slug }}">{{ s.slug }}</a>{% if not loop.last %}, {% endif %}
+    {% endfor %}
+    {% endif %}
 </div>
 
 <div class="entry-content" id="entry"></div>

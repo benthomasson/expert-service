@@ -19,7 +19,7 @@ from expert_service.auth import router as auth_router, security, verify_auth, ve
 from fastapi.security import HTTPAuthorizationCredentials
 from expert_service.config import settings
 from expert_service.db.connection import get_session, init_db
-from expert_service.db.models import Assessment, Entry, Project, Source
+from expert_service.db.models import Assessment, Entry, Project, Source, entry_sources
 from expert_service.rbac import UserInfo
 from expert_service.rms import api as rms_api
 
@@ -327,8 +327,10 @@ async def source_view(
     # Extract topic from path: "entries/2026/04/23/scan-ftl-reasons.md" → "scan-ftl-reasons"
     topic = Path(path).stem
 
+    from sqlalchemy.orm import selectinload
     entry = (await session.execute(
-        select(Entry).where(Entry.project_id == project_id, Entry.topic == topic).limit(1)
+        select(Entry).options(selectinload(Entry.sources))
+        .where(Entry.project_id == project_id, Entry.topic == topic).limit(1)
     )).scalar_one_or_none()
     if not entry:
         return HTMLResponse(f"Source not found: {path}", status_code=404)
@@ -337,6 +339,7 @@ async def source_view(
         "project": {"id": project_id, "name": project.name},
         "entry": {"id": entry.id, "title": entry.title, "topic": entry.topic},
         "content_json": json.dumps(entry.content),
+        "linked_sources": [{"slug": s.slug} for s in entry.sources],
     })
 
 
@@ -355,8 +358,10 @@ async def entry_view(
     if not project:
         return HTMLResponse("Project not found", status_code=404)
 
+    from sqlalchemy.orm import selectinload
     entry = (await session.execute(
-        select(Entry).where(Entry.project_id == project_id, Entry.id == entry_id)
+        select(Entry).options(selectinload(Entry.sources))
+        .where(Entry.project_id == project_id, Entry.id == entry_id)
     )).scalar_one_or_none()
     if not entry:
         return HTMLResponse("Entry not found", status_code=404)
@@ -365,6 +370,7 @@ async def entry_view(
         "project": {"id": project_id, "name": project.name},
         "entry": {"id": entry.id, "title": entry.title, "topic": entry.topic},
         "content_json": json.dumps(entry.content),
+        "linked_sources": [{"slug": s.slug} for s in entry.sources],
     })
 
 

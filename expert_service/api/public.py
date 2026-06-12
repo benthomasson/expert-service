@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi import Depends
 from expert_service.db.connection import get_session
-from expert_service.db.models import Entry, Project
+from expert_service.db.models import Entry, Project, Source
 from expert_service.rms import api as rms_api
 
 router = APIRouter(prefix="/public/{project_name}", tags=["public"])
@@ -465,18 +465,54 @@ async def get_entry(
     session: AsyncSession = Depends(get_session),
 ):
     project = await _resolve_public_project(project_name, session)
+    from sqlalchemy.orm import selectinload
     result = await session.execute(
-        select(Entry).where(Entry.project_id == project.id, Entry.id == entry_id)
+        select(Entry).options(selectinload(Entry.sources))
+        .where(Entry.project_id == project.id, Entry.id == entry_id)
     )
     entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     prefix = f"/public/{project_name}"
     nav = f'<nav><a href="{prefix}/beliefs">&larr; All beliefs</a></nav>'
+    source_links = ""
+    if entry.sources:
+        links = " &middot; ".join(
+            f'<a href="{prefix}/source/{html_mod.escape(s.slug)}">{html_mod.escape(s.slug)}</a>'
+            for s in entry.sources
+        )
+        source_links = f'<p><strong>Original source:</strong> {links}</p><hr>'
     body = _md_to_html(entry.content)
     html = _HTML_TEMPLATE.format(
         title=f"{entry_id} — {project.name}",
-        body=nav + body,
+        body=nav + source_links + body,
+    )
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
+    )
+
+
+@router.get("/source/{slug}")
+async def get_source(
+    project_name: str,
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await _resolve_public_project(project_name, session)
+    result = await session.execute(
+        select(Source).where(Source.project_id == project.id, Source.slug == slug)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    prefix = f"/public/{project_name}"
+    nav = f'<nav><a href="{prefix}/beliefs">&larr; All beliefs</a></nav>'
+    title_html = f"<h1>{html_mod.escape(source.slug)}</h1>"
+    body = _md_to_html(source.content)
+    html = _HTML_TEMPLATE.format(
+        title=f"{slug} — {project.name}",
+        body=nav + title_html + body,
     )
     return HTMLResponse(
         html,
