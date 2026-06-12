@@ -433,7 +433,7 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tupl
     terms = _get_query_terms(query)
     if not terms:
         return "", []
-    pid = str(project_id)
+    pid = project_id.hex if settings.db_backend == "sqlite" else str(project_id)
     where, order, params = fts_clause("c.text", query)
     params["pid"] = pid
     params["lim"] = limit * 3
