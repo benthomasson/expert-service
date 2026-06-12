@@ -18,6 +18,20 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from pydantic import AnyUrl
+
+
+class _OpenClient(OAuthClientInformationFull):
+    """Client that accepts any redirect_uri. Used for auto-registered clients
+    where we don't know the redirect URIs in advance."""
+
+    def validate_redirect_uri(self, redirect_uri: AnyUrl | None) -> AnyUrl:
+        if redirect_uri is not None:
+            return redirect_uri
+        if self.redirect_uris and len(self.redirect_uris) == 1:
+            return self.redirect_uris[0]
+        from mcp.shared.auth import InvalidRedirectUriError
+        raise InvalidRedirectUriError("redirect_uri must be specified")
 
 
 class ExpertOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
@@ -34,7 +48,19 @@ class ExpertOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Re
         self._pending_auth: dict[str, dict] = {}
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        return self._clients.get(client_id)
+        client = self._clients.get(client_id)
+        if client:
+            return client
+        # Auto-register unknown clients (e.g. Claude Desktop with pre-configured
+        # credentials that skips dynamic registration). Security comes from the
+        # Google OAuth step, not from MCP client_secret validation.
+        client = _OpenClient(
+            client_id=client_id,
+            redirect_uris=["https://placeholder.invalid/callback"],
+            token_endpoint_auth_method="none",
+        )
+        self._clients[client_id] = client
+        return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         self._clients[client_info.client_id] = client_info
