@@ -21,6 +21,7 @@ from expert_service.config import settings
 from expert_service.db.connection import get_session, init_db
 from expert_service.db.models import Assessment, Entry, Project, Source, entry_sources
 from expert_service.rbac import UserInfo
+from expert_service.mcp import mcp as mcp_server
 from expert_service.rms import api as rms_api
 
 # LLM-dependent modules — only imported when LLM mode is enabled.
@@ -30,6 +31,9 @@ if settings.llm_enabled:
     from expert_service.chat.meta_agent import invalidate_meta_cache
 else:
     def invalidate_meta_cache(): pass
+
+
+_mcp_http_app = mcp_server.streamable_http_app()
 
 
 @asynccontextmanager
@@ -153,6 +157,9 @@ if settings.llm_enabled:
 
 # Always register: FTS-only /ask (shadowed by chat.router's /ask in LLM mode)
 app.include_router(ask.router, dependencies=[Depends(verify_auth_or_public)])
+
+# MCP server (streamable HTTP at /mcp)
+app.mount("/mcp", _mcp_http_app)
 
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
