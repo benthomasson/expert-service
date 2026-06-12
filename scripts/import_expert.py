@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ def parse_beliefs(beliefs_path: Path) -> list[dict]:
     # - Source hash: hash
     # - Date: date
     pattern = re.compile(
-        r"^### (\S+) \[(IN|OUT|STALE)\]\s*\n"
+        r"^### (\S+) \[(IN|OUT|STALE)\][^\n]*\n"
         r"(.*?)"
         r"(?=^### |\Z)",
         re.MULTILINE | re.DOTALL,
@@ -139,6 +140,7 @@ def main():
     parser.add_argument("--name", required=True, help="Project name")
     parser.add_argument("--domain", required=True, help="Project domain")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Service base URL")
+    parser.add_argument("--api-key", default=os.environ.get("EXPERT_SERVICE_API_KEY", ""), help="API key for authentication")
     parser.add_argument("--project-id", help="Use existing project ID instead of creating new")
     args = parser.parse_args()
 
@@ -147,7 +149,11 @@ def main():
         print(f"Error: {repo} is not a directory")
         sys.exit(1)
 
-    client = httpx.Client(base_url=args.base_url, timeout=30)
+    headers = {}
+    if args.api_key:
+        headers["Authorization"] = f"Bearer {args.api_key}"
+
+    client = httpx.Client(base_url=args.base_url, headers=headers, timeout=30)
 
     # 1. Create or use existing project
     if args.project_id:
@@ -204,22 +210,30 @@ def main():
     else:
         print(f"No entries directory at {entries_dir}")
 
-    # 4. Import beliefs
+    # 4. Import beliefs (batched to avoid timeouts)
     beliefs_path = repo / "beliefs.md"
     if beliefs_path.is_file():
         claims = parse_beliefs(beliefs_path)
         print(f"\nImporting {len(claims)} beliefs...")
 
-        resp = client.post(
-            f"/api/projects/{project_id}/import/beliefs",
-            json={"claims": claims},
-            timeout=300,
-        )
-        if resp.status_code == 200:
-            result = resp.json()
-            print(f"  Imported: {result.get('imported', 0)}, Skipped: {result.get('skipped', 0)}")
-        else:
-            print(f"  Error: {resp.status_code} {resp.text}")
+        batch_size = 200
+        total_imported = 0
+        total_skipped = 0
+        for i in range(0, len(claims), batch_size):
+            batch = claims[i:i + batch_size]
+            resp = client.post(
+                f"/api/projects/{project_id}/import/beliefs",
+                json={"claims": batch},
+                timeout=300,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                total_imported += result.get('imported', 0)
+                total_skipped += result.get('skipped', 0)
+                print(f"  Batch {i // batch_size + 1}: {result.get('imported', 0)} imported, {result.get('skipped', 0)} skipped")
+            else:
+                print(f"  Batch {i // batch_size + 1} error: {resp.status_code} {resp.text}")
+        print(f"  Total: {total_imported} imported, {total_skipped} skipped")
     else:
         print(f"No beliefs.md at {beliefs_path}")
 
