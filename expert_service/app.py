@@ -306,6 +306,33 @@ if settings.llm_enabled:
         })
 
 
+@app.get("/projects/{project_id}/sources/{slug}/view", response_class=HTMLResponse)
+async def source_content_view(
+    request: Request,
+    project_id: UUID,
+    slug: str,
+    _user: UserInfo = Depends(verify_auth_web),
+    session: AsyncSession = Depends(get_session),
+):
+    """Render a source document's original content."""
+    project = (await session.execute(
+        select(Project).where(Project.id == project_id)
+    )).scalar_one_or_none()
+    if not project:
+        return HTMLResponse("Project not found", status_code=404)
+    source = (await session.execute(
+        select(Source).where(Source.project_id == project_id, Source.slug == slug)
+    )).scalar_one_or_none()
+    if not source:
+        return HTMLResponse(f"Source not found: {slug}", status_code=404)
+    return templates.TemplateResponse(request, "entries/view.html", {
+        "project": {"id": project_id, "name": project.name},
+        "entry": {"id": slug, "title": slug, "topic": slug},
+        "content_json": json.dumps(source.content),
+        "linked_sources": [],
+    })
+
+
 @app.get("/projects/{project_id}/source/{path:path}", response_class=HTMLResponse)
 async def source_view(
     request: Request,
