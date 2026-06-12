@@ -216,7 +216,7 @@ def _build_sources_section(sources: list[SourceRef], response_text: str = "") ->
         lines += ["", "", "## Sources", ""]
         for s in sourced:
             key = s.cite_key or s.slug
-            lines.append(f"- **[{key}]** ({s.category}) {s.label}")
+            lines.append(f"- **[{key}]** {s.label}")
             if s.url:
                 lines.append(f"  [Source]({s.url})")
             elif "/" in s.slug:
@@ -308,15 +308,14 @@ def _quick_belief_search(project_id: UUID, question: str, limit: int = 10) -> tu
         if source:
             title = _source_title_from_path(source)
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
-            slug = source
             url = source_url or ""
             if not url and "/" in source:
                 url = f"/projects/{project_id}/source/{source}"
         else:
             title = rid.split(":", 1)[-1].replace("-", " ").title()
             label = f'{domain}, "{title}"' if domain else f'"{title}"'
-            slug = rid
             url = ""
+        slug = rid
         sources.append(SourceRef(
             label=label,
             slug=slug,
