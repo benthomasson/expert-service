@@ -7,7 +7,11 @@ from mcp.server.fastmcp import FastMCP
 
 from expert_service.config import settings
 
-mcp = FastMCP("expert-service", stateless_http=True)
+mcp = FastMCP(
+    "expert-service",
+    stateless_http=True,
+    transport_security={"enable_dns_rebinding_protection": False},
+)
 
 BASE_URL = "http://localhost:8000"
 TIMEOUT = 120.0
