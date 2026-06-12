@@ -159,6 +159,35 @@ if settings.llm_enabled:
 # Always register: FTS-only /ask (shadowed by chat.router's /ask in LLM mode)
 app.include_router(ask.router, dependencies=[Depends(verify_auth_or_public)])
 
+# MCP OAuth discovery routes (RFC 9728 + RFC 8414)
+# Must be on the parent app — MCP clients look for these at the domain root,
+# not under the /mcp mount prefix.
+if settings.google_client_id and settings.google_client_secret:
+    from mcp.shared.auth import OAuthMetadata, ProtectedResourceMetadata
+    from fastapi.responses import JSONResponse as _JSONResponse
+
+    @app.get("/.well-known/oauth-protected-resource/mcp/mcp")
+    async def mcp_protected_resource_metadata():
+        issuer = settings.mcp_issuer_url
+        return ProtectedResourceMetadata(
+            resource=issuer,
+            authorization_servers=[issuer],
+        ).model_dump(mode="json")
+
+    @app.get("/.well-known/oauth-authorization-server/mcp")
+    async def mcp_auth_server_metadata():
+        issuer = settings.mcp_issuer_url.rstrip("/")
+        return OAuthMetadata(
+            issuer=issuer,
+            authorization_endpoint=f"{issuer}/authorize",
+            token_endpoint=f"{issuer}/token",
+            registration_endpoint=f"{issuer}/register",
+            response_types_supported=["code"],
+            grant_types_supported=["authorization_code", "refresh_token"],
+            token_endpoint_auth_methods_supported=["client_secret_post", "client_secret_basic"],
+            code_challenge_methods_supported=["S256"],
+        ).model_dump(mode="json")
+
 # MCP server (streamable HTTP at /mcp)
 app.mount("/mcp", _mcp_http_app)
 

@@ -61,6 +61,7 @@ class Settings(BaseModel):
     google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     secret_key: str = os.getenv("SECRET_KEY", "dev-insecure-key")
     api_key: str = os.getenv("EXPERT_SERVICE_API_KEY", "")
+    mcp_issuer_url: str = os.getenv("MCP_ISSUER_URL", "https://expert.llmeem.com/mcp")
 
     @property
     def llm_enabled(self) -> bool:
