@@ -40,7 +40,8 @@ _mcp_http_app = mcp_server.streamable_http_app()
 async def lifespan(app):
     """Create SQLite tables on startup (no-op for PostgreSQL)."""
     init_db()
-    yield
+    async with mcp_server._session_manager.run():
+        yield
 
 app = FastAPI(title="Expert Service", version="0.3.0", lifespan=lifespan)
 
