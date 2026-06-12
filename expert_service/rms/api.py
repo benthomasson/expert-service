@@ -441,6 +441,7 @@ def search_beliefs_fts(project_id: UUID, query: str, limit: int = 10) -> list[di
                     "FROM nodes n "
                     "JOIN nodes_fts f ON f.id = n.id "
                     "WHERE nodes_fts MATCH ? AND n.truth_value = 'IN' "
+                    "ORDER BY f.rank "
                     "LIMIT ?",
                     (fts5_query, limit),
                 ).fetchall()
