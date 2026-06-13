@@ -166,16 +166,14 @@ if settings.google_client_id and settings.google_client_secret:
     from mcp.shared.auth import OAuthMetadata, ProtectedResourceMetadata
     from fastapi.responses import JSONResponse as _JSONResponse
 
-    @app.get("/.well-known/oauth-protected-resource/mcp/mcp")
-    async def mcp_protected_resource_metadata():
+    def _prm_response():
         issuer = settings.mcp_issuer_url
         return ProtectedResourceMetadata(
             resource=issuer,
             authorization_servers=[issuer],
         ).model_dump(mode="json")
 
-    @app.get("/.well-known/oauth-authorization-server/mcp")
-    async def mcp_auth_server_metadata():
+    def _asm_response():
         issuer = settings.mcp_issuer_url.rstrip("/")
         return OAuthMetadata(
             issuer=issuer,
@@ -187,6 +185,27 @@ if settings.google_client_id and settings.google_client_secret:
             token_endpoint_auth_methods_supported=["client_secret_post", "client_secret_basic"],
             code_challenge_methods_supported=["S256"],
         ).model_dump(mode="json")
+
+    # Register at all paths clients may try (WWW-Authenticate hint, path-based, root)
+    @app.get("/.well-known/oauth-protected-resource/mcp/mcp")
+    async def mcp_prm_full():
+        return _prm_response()
+
+    @app.get("/.well-known/oauth-protected-resource/mcp")
+    async def mcp_prm_short():
+        return _prm_response()
+
+    @app.get("/.well-known/oauth-protected-resource")
+    async def mcp_prm_root():
+        return _prm_response()
+
+    @app.get("/.well-known/oauth-authorization-server/mcp")
+    async def mcp_asm_path():
+        return _asm_response()
+
+    @app.get("/.well-known/oauth-authorization-server")
+    async def mcp_asm_root():
+        return _asm_response()
 
 # MCP server (streamable HTTP at /mcp)
 app.mount("/mcp", _mcp_http_app)
