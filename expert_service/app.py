@@ -168,8 +168,9 @@ if settings.google_client_id and settings.google_client_secret:
 
     def _prm_response():
         issuer = settings.mcp_issuer_url
+        resource = f"{issuer}/mcp"
         return ProtectedResourceMetadata(
-            resource=issuer,
+            resource=resource,
             authorization_servers=[issuer],
         ).model_dump(mode="json")
 

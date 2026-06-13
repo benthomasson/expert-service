@@ -34,7 +34,7 @@ if settings.google_client_id and settings.google_client_secret:
         "auth_server_provider": _provider,
         "auth": AuthSettings(
             issuer_url=settings.mcp_issuer_url,
-            resource_server_url=settings.mcp_issuer_url,
+            resource_server_url=f"{settings.mcp_issuer_url}/mcp",
             client_registration_options=ClientRegistrationOptions(enabled=True),
         ),
     }
