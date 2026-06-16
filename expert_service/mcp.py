@@ -195,27 +195,6 @@ async def deep_search(query: str, project: str) -> str:
         return json.dumps(resp.json(), indent=2)
 
 
-@mcp.tool()
-async def ask(question: str, project: str) -> str:
-    """Ask a question and get an LLM-synthesized answer grounded in the knowledge base.
-
-    Slower than deep_search but returns a ready-to-use answer.
-
-    Args:
-        question: The question to ask
-        project: Project name or UUID
-    """
-    pid = await _resolve(project)
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{BASE_URL}/api/projects/{pid}/ask",
-            json={"question": question},
-            headers=_headers(),
-            timeout=TIMEOUT,
-        )
-        resp.raise_for_status()
-        return json.dumps(resp.json(), indent=2)
-
 
 @mcp.tool()
 async def search(query: str, project: str) -> str:
