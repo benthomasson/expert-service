@@ -76,4 +76,23 @@ def init_db():
     # Ensure the data directory exists
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     from expert_service.db.models import Base
-    Base.metadata.create_all(get_sync_engine())
+    from sqlalchemy import text as sa_text
+    eng = get_sync_engine()
+    Base.metadata.create_all(eng)
+    with eng.connect() as conn:
+        conn.execute(sa_text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS source_chunks_fts "
+            "USING fts5(id, text, content=source_chunks, content_rowid=id)"
+        ))
+        for trigger in [
+            "CREATE TRIGGER IF NOT EXISTS source_chunks_ai AFTER INSERT ON source_chunks BEGIN "
+            "INSERT INTO source_chunks_fts(rowid, id, text) VALUES (new.id, new.id, new.text); END",
+            "CREATE TRIGGER IF NOT EXISTS source_chunks_ad AFTER DELETE ON source_chunks BEGIN "
+            "INSERT INTO source_chunks_fts(source_chunks_fts, rowid, id, text) VALUES ('delete', old.id, old.id, old.text); END",
+            "CREATE TRIGGER IF NOT EXISTS source_chunks_au AFTER UPDATE ON source_chunks BEGIN "
+            "INSERT INTO source_chunks_fts(source_chunks_fts, rowid, id, text) VALUES ('delete', old.id, old.id, old.text); "
+            "INSERT INTO source_chunks_fts(rowid, id, text) VALUES (new.id, new.id, new.text); END",
+        ]:
+            conn.execute(sa_text(trigger))
+        conn.execute(sa_text("INSERT INTO source_chunks_fts(source_chunks_fts) VALUES ('rebuild')"))
+        conn.commit()

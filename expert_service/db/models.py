@@ -49,7 +49,7 @@ class Project(Base):
     name = Column(String, nullable=False, unique=True)
     domain = Column(String, nullable=False)
     config = Column(JSON, default=dict)
-    public = Column(Boolean, nullable=False, server_default="false")
+    public = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 

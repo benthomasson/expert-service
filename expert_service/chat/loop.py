@@ -425,32 +425,66 @@ def _search_source_chunks(project_id: UUID, query: str, limit: int = 10) -> tupl
     """FTS search over source_chunks with IDF re-ranking.
 
     PostgreSQL: tsvector with ts_rank_cd baseline, IDF re-ranking.
-    SQLite: LIKE-based OR search, no IDF re-ranking.
+    SQLite: FTS5 with BM25 ranking, falls back to LIKE if FTS5 unavailable.
 
     Returns (context_string, source_refs) where source_refs tracks provenance.
     """
     terms = _get_query_terms(query)
     if not terms:
         return "", []
-    pid = project_id.hex if settings.db_backend == "sqlite" else str(project_id)
-    where, order, params = fts_clause("c.text", query)
-    params["pid"] = pid
-    params["lim"] = limit * 3
-    order_clause = f"ORDER BY {order}" if order else ""
-    with get_sync_session() as session:
-        idfs = _compute_idf(session, pid, terms, "source_chunks")
-        rows = session.execute(
-            sa_text(
-                f"SELECT c.text, c.section, s.slug, s.url "
-                f"FROM source_chunks c "
-                f"JOIN sources s ON s.id = c.source_id "
-                f"WHERE c.project_id = :pid "
-                f"AND {where} "
-                f"{order_clause} "
-                f"LIMIT :lim"
-            ),
-            params,
-        ).all()
+    pid = str(project_id)
+
+    if settings.db_backend == "sqlite":
+        fts5_query = " OR ".join(f'"{t}"' for t in terms)
+        with get_sync_session() as session:
+            try:
+                rows = session.execute(
+                    sa_text(
+                        "SELECT c.text, c.section, s.slug, s.url "
+                        "FROM source_chunks c "
+                        "JOIN source_chunks_fts f ON f.id = c.id "
+                        "JOIN sources s ON s.id = c.source_id "
+                        "WHERE c.project_id = :pid "
+                        "AND source_chunks_fts MATCH :q "
+                        "ORDER BY f.rank "
+                        "LIMIT :lim"
+                    ),
+                    {"pid": pid, "q": fts5_query, "lim": limit * 3},
+                ).all()
+            except Exception:
+                where, order, params = fts_clause("c.text", query)
+                params["pid"] = pid
+                params["lim"] = limit * 3
+                rows = session.execute(
+                    sa_text(
+                        f"SELECT c.text, c.section, s.slug, s.url "
+                        f"FROM source_chunks c "
+                        f"JOIN sources s ON s.id = c.source_id "
+                        f"WHERE c.project_id = :pid "
+                        f"AND {where} "
+                        f"LIMIT :lim"
+                    ),
+                    params,
+                ).all()
+    else:
+        where, order, params = fts_clause("c.text", query)
+        params["pid"] = pid
+        params["lim"] = limit * 3
+        order_clause = f"ORDER BY {order}" if order else ""
+        with get_sync_session() as session:
+            idfs = _compute_idf(session, pid, terms, "source_chunks")
+            rows = session.execute(
+                sa_text(
+                    f"SELECT c.text, c.section, s.slug, s.url "
+                    f"FROM source_chunks c "
+                    f"JOIN sources s ON s.id = c.source_id "
+                    f"WHERE c.project_id = :pid "
+                    f"AND {where} "
+                    f"{order_clause} "
+                    f"LIMIT :lim"
+                ),
+                params,
+            ).all()
     if not rows:
         return "", []
     if idfs:
