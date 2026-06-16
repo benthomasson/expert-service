@@ -521,28 +521,20 @@ async def chunk_sources(
     chunked = 0
     total_chunks = 0
     for source in sources.scalars().all():
-        # Skip if already chunked
         existing = await session.execute(
-            text("SELECT 1 FROM source_chunks WHERE source_id = :sid LIMIT 1"),
-            {"sid": str(source.id)},
+            select(SourceChunk).where(SourceChunk.source_id == source.id).limit(1)
         )
         if existing.scalar_one_or_none():
             continue
         chunks = chunk_markdown(source.content)
         for c in chunks:
-            await session.execute(
-                text(
-                    "INSERT INTO source_chunks (project_id, source_id, chunk_index, section, text) "
-                    "VALUES (:pid, :sid, :idx, :sec, :txt)"
-                ),
-                {
-                    "pid": str(project_id),
-                    "sid": str(source.id),
-                    "idx": c["chunk_index"],
-                    "sec": c["section"],
-                    "txt": c["text"],
-                },
-            )
+            session.add(SourceChunk(
+                project_id=project_id,
+                source_id=source.id,
+                chunk_index=c["chunk_index"],
+                section=c["section"],
+                text=c["text"],
+            ))
         chunked += 1
         total_chunks += len(chunks)
     await session.commit()

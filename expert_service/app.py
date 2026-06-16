@@ -79,6 +79,8 @@ if settings.google_client_id and settings.google_client_secret:
 
 @app.exception_handler(_LoginRedirect)
 async def login_redirect_handler(request: Request, exc: _LoginRedirect):
+    if settings.hub_mode:
+        return RedirectResponse(url="/")
     return RedirectResponse(url="/login")
 
 
@@ -110,8 +112,9 @@ async def robots_txt():
     )
 
 
-# Auth routes (login/callback/logout — always public)
-app.include_router(auth_router)
+# Auth routes (login/callback/logout — disabled in hub mode)
+if not settings.hub_mode:
+    app.include_router(auth_router)
 
 
 @app.get("/api/version", dependencies=[Depends(verify_auth)])
@@ -214,6 +217,7 @@ app.mount("/mcp", _mcp_http_app)
 # Templates
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["llm_enabled"] = settings.llm_enabled
+templates.env.globals["hub_mode"] = settings.hub_mode
 
 
 # --- Web UI Routes ---
@@ -239,33 +243,53 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
     })
 
 
-@app.get("/projects", response_class=HTMLResponse)
-async def projects_list(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
-    """Authenticated projects list page."""
-    result = await session.execute(select(Project).order_by(Project.created_at.desc()))
-    project_list = result.scalars().all()
+if not settings.hub_mode:
+    @app.get("/projects", response_class=HTMLResponse)
+    async def projects_list(request: Request, _user: UserInfo = Depends(verify_auth_web), session: AsyncSession = Depends(get_session)):
+        """Authenticated projects list page."""
+        result = await session.execute(select(Project).order_by(Project.created_at.desc()))
+        project_list = result.scalars().all()
 
-    projects_with_stats = []
-    for p in project_list:
-        source_count = await session.scalar(
-            select(func.count()).select_from(Source).where(Source.project_id == p.id)
-        )
-        entry_count = await session.scalar(
-            select(func.count()).select_from(Entry).where(Entry.project_id == p.id)
-        )
-        belief_count = await asyncio.to_thread(rms_api.count_beliefs, p.id, "IN")
-        projects_with_stats.append({
-            "id": p.id,
-            "name": p.name,
-            "domain": p.domain,
-            "source_count": source_count or 0,
-            "entry_count": entry_count or 0,
-            "belief_count": belief_count or 0,
+        projects_with_stats = []
+        for p in project_list:
+            source_count = await session.scalar(
+                select(func.count()).select_from(Source).where(Source.project_id == p.id)
+            )
+            entry_count = await session.scalar(
+                select(func.count()).select_from(Entry).where(Entry.project_id == p.id)
+            )
+            belief_count = await asyncio.to_thread(rms_api.count_beliefs, p.id, "IN")
+            projects_with_stats.append({
+                "id": p.id,
+                "name": p.name,
+                "domain": p.domain,
+                "source_count": source_count or 0,
+                "entry_count": entry_count or 0,
+                "belief_count": belief_count or 0,
+            })
+
+        return templates.TemplateResponse(request, "projects/list.html", {
+            "projects": projects_with_stats,
         })
 
-    return templates.TemplateResponse(request, "projects/list.html", {
-        "projects": projects_with_stats,
-    })
+    @app.get("/projects/new", response_class=HTMLResponse)
+    async def new_project_form(request: Request, _user: UserInfo = Depends(verify_auth_web)):
+        return templates.TemplateResponse(request, "projects/create.html")
+
+    @app.post("/projects/new")
+    async def create_project_form(
+        request: Request,
+        name: str = Form(...),
+        domain: str = Form(...),
+        _user: UserInfo = Depends(verify_auth_web),
+        session: AsyncSession = Depends(get_session),
+    ):
+        project = Project(name=name, domain=domain)
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+        invalidate_meta_cache()
+        return RedirectResponse(f"/projects/{project.id}", status_code=303)
 
 
 if settings.llm_enabled:
@@ -282,27 +306,6 @@ if settings.llm_enabled:
         return templates.TemplateResponse(request, "chat/meta_chat.html", {
             "experts": experts,
         })
-
-
-@app.get("/projects/new", response_class=HTMLResponse)
-async def new_project_form(request: Request, _user: UserInfo = Depends(verify_auth_web)):
-    return templates.TemplateResponse(request, "projects/create.html")
-
-
-@app.post("/projects/new")
-async def create_project_form(
-    request: Request,
-    name: str = Form(...),
-    domain: str = Form(...),
-    _user: UserInfo = Depends(verify_auth_web),
-    session: AsyncSession = Depends(get_session),
-):
-    project = Project(name=name, domain=domain)
-    session.add(project)
-    await session.commit()
-    await session.refresh(project)
-    invalidate_meta_cache()
-    return RedirectResponse(f"/projects/{project.id}", status_code=303)
 
 
 @app.get("/projects/{project_id}", response_class=HTMLResponse)

@@ -71,5 +71,10 @@ class Settings(BaseModel):
         """
         return os.getenv("EXPERT_LLM", "true").lower() not in ("false", "0", "no")
 
+    @property
+    def hub_mode(self) -> bool:
+        """Public hub mode — disables login UI and authenticated project pages."""
+        return os.getenv("EXPERT_HUB_MODE", "false").lower() in ("true", "1", "yes")
+
 
 settings = Settings()

@@ -27,14 +27,16 @@
     <nav class="container">
         <ul><li><a href="/" class="brand">Expert Service</a></li></ul>
         <ul>
-            <li><a href="/projects">Projects</a></li>
+            {% if not hub_mode %}<li><a href="/projects">Projects</a></li>{% endif %}
             {% if llm_enabled %}<li><a href="/meta/chat">Meta-Expert</a></li>{% endif %}
+            {% if not hub_mode %}
             {% if not request.state.user %}
             <li><a href="/login">Login</a></li>
             {% endif %}
             {% if request.state.user %}
             <li><small>{{ request.state.user.display_name or request.state.user.identity }}</small></li>
             <li><a href="/logout">Logout</a></li>
+            {% endif %}
             {% endif %}
         </ul>
     </nav>
