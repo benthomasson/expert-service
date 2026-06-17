@@ -536,6 +536,41 @@ async def search_beliefs(
     )
 
 
+@router.get("/deep-search")
+async def deep_search(
+    project_name: str,
+    q: str,
+    session: AsyncSession = Depends(get_session),
+):
+    from expert_service.chat.loop import _quick_belief_search, _search_source_chunks
+
+    project = await _resolve_public_project(project_name, session)
+    (belief_ctx, belief_sources), (chunk_ctx, chunk_sources) = await asyncio.gather(
+        asyncio.to_thread(_quick_belief_search, project.id, q, 20),
+        asyncio.to_thread(_search_source_chunks, project.id, q, 10),
+    )
+    return JSONResponse(
+        {
+            "query": q,
+            "belief_context": belief_ctx,
+            "chunk_context": chunk_ctx,
+            "beliefs": [
+                {"cite_key": s.cite_key, "label": s.label, "slug": s.slug,
+                 "url": s.url, "category": s.category}
+                for s in belief_sources
+            ],
+            "sources": [
+                {"cite_key": s.cite_key, "label": s.label, "slug": s.slug,
+                 "url": s.url, "category": s.category}
+                for s in chunk_sources
+            ],
+            "belief_count": len(belief_sources),
+            "source_count": len(chunk_sources),
+        },
+        headers={"Cache-Control": f"public, max-age={_CACHE_MAX_AGE}"},
+    )
+
+
 # --- Landing page ---
 
 @landing_router.get("/", response_class=HTMLResponse)

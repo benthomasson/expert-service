@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from expert_service.chunking import chunk_markdown
 from expert_service.config import settings
 from expert_service.db.connection import get_session, get_sync_session
-from expert_service.db.models import Entry, Source, SourceChunk, entry_sources
+from expert_service.db.models import Entry, Source, SourceChunk, Topic, entry_sources
 from expert_service.db.search import fts_clause
 from expert_service.rms import api as rms_api
 
@@ -539,3 +539,125 @@ async def chunk_sources(
         total_chunks += len(chunks)
     await session.commit()
     return {"sources_chunked": chunked, "total_chunks": total_chunks}
+
+
+# --- Topic endpoints ---
+
+
+@router.get("/topics")
+async def list_topics(
+    project_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """List stored topics for a project."""
+    result = await session.execute(
+        select(Topic)
+        .where(Topic.project_id == project_id)
+        .order_by(Topic.belief_count.desc())
+    )
+    return [
+        {
+            "name": t.name,
+            "label": t.label,
+            "description": t.description,
+            "belief_count": t.belief_count,
+            "curated": t.curated,
+        }
+        for t in result.scalars().all()
+    ]
+
+
+@router.post("/topics/generate", dependencies=[Depends(verify_auth)])
+async def generate_topics(
+    project_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Generate topics from belief node IDs (word frequency) and store them.
+
+    Replaces non-curated topics; keeps any manually curated ones.
+    """
+    raw = await asyncio.to_thread(rms_api.topics, project_id, 50)
+
+    existing = await session.execute(
+        select(Topic).where(Topic.project_id == project_id)
+    )
+    existing_map = {t.name: t for t in existing.scalars().all()}
+
+    generated = 0
+    kept_curated = 0
+    for item in raw.get("topics", []):
+        name = item["topic"]
+        count = item["count"]
+        if name in existing_map:
+            t = existing_map[name]
+            if t.curated:
+                t.belief_count = count
+                kept_curated += 1
+            else:
+                t.belief_count = count
+                generated += 1
+        else:
+            session.add(Topic(
+                project_id=project_id,
+                name=name,
+                belief_count=count,
+            ))
+            generated += 1
+
+    # Remove stale non-curated topics not in the new set
+    new_names = {item["topic"] for item in raw.get("topics", [])}
+    for name, t in existing_map.items():
+        if name not in new_names and not t.curated:
+            await session.delete(t)
+
+    await session.commit()
+    return {"generated": generated, "kept_curated": kept_curated, "total_nodes": raw.get("total_nodes", 0)}
+
+
+class TopicImport(BaseModel):
+    name: str
+    label: str | None = None
+    description: str | None = None
+    belief_count: int = 0
+
+
+class TopicsImportRequest(BaseModel):
+    topics: list[TopicImport]
+
+
+@router.post("/import/topics", dependencies=[Depends(verify_auth)])
+async def import_topics(
+    project_id: UUID,
+    data: TopicsImportRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk import pre-curated topics."""
+    imported = 0
+    updated = 0
+
+    existing = await session.execute(
+        select(Topic).where(Topic.project_id == project_id)
+    )
+    existing_map = {t.name: t for t in existing.scalars().all()}
+
+    for item in data.topics:
+        if item.name in existing_map:
+            t = existing_map[item.name]
+            t.label = item.label
+            t.description = item.description
+            t.belief_count = item.belief_count
+            t.curated = True
+            updated += 1
+        else:
+            session.add(Topic(
+                project_id=project_id,
+                name=item.name,
+                label=item.label,
+                description=item.description,
+                belief_count=item.belief_count,
+                curated=True,
+            ))
+            imported += 1
+
+    await session.commit()
+    return {"imported": imported, "updated": updated}

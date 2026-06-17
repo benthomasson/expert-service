@@ -360,6 +360,15 @@ def import_network(project_id: UUID, network) -> dict:
 
 # --- Belief/nogood count helpers (avoids direct rms_nodes SQL) ---
 
+def topics(project_id: UUID, limit: int = 50) -> dict:
+    """Extract topics from belief node IDs by word frequency."""
+    if _is_sqlite():
+        import reasons_lib.api as rlib
+        return rlib.topics(limit=limit, db_path=_db_path(project_id))
+    with _api(project_id) as api:
+        return api.topics(limit=limit)
+
+
 def count_beliefs(project_id: UUID, status: str | None = "IN") -> int:
     """Count beliefs, optionally filtered by truth_value."""
     if _is_sqlite():

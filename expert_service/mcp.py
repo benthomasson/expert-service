@@ -329,6 +329,43 @@ async def list_projects() -> str:
 
 
 @mcp.tool()
+async def list_topics(project: str) -> str:
+    """List the main topics covered by a project's knowledge base.
+
+    Returns topic areas with belief counts, giving a quick overview
+    of what the project covers. Use this before searching to understand
+    the knowledge base structure.
+
+    Args:
+        project: Project name or UUID
+    """
+    pid = await _resolve(project)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{BASE_URL}/api/projects/{pid}/topics",
+            headers=_headers(),
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        topics = resp.json()
+        if not topics:
+            gen = await client.post(
+                f"{BASE_URL}/api/projects/{pid}/topics/generate",
+                headers=_headers(),
+                timeout=TIMEOUT,
+            )
+            gen.raise_for_status()
+            resp = await client.get(
+                f"{BASE_URL}/api/projects/{pid}/topics",
+                headers=_headers(),
+                timeout=TIMEOUT,
+            )
+            resp.raise_for_status()
+            topics = resp.json()
+        return json.dumps(topics, indent=2)
+
+
+@mcp.tool()
 async def list_entries(topic: str = "", project: str = "") -> str:
     """List analysis entries (reports, findings, assessments).
 

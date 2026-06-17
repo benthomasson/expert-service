@@ -59,6 +59,7 @@ class Project(Base):
     nogoods = relationship("Nogood", back_populates="project", cascade="all, delete-orphan")
     assessments = relationship("Assessment", back_populates="project", cascade="all, delete-orphan")
     pipeline_runs = relationship("PipelineRun", back_populates="project", cascade="all, delete-orphan")
+    topics = relationship("Topic", back_populates="project", cascade="all, delete-orphan")
 
 
 entry_sources = Table(
@@ -178,6 +179,22 @@ class SourceChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     section = Column(String, default="")
     text = Column(Text, nullable=False)
+
+
+class Topic(Base):
+    __tablename__ = "topics"
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    label = Column(String)
+    description = Column(String)
+    belief_count = Column(Integer, default=0)
+    curated = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="topics")
 
 
 if _has_pgvector:
