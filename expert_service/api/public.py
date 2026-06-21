@@ -133,6 +133,7 @@ _HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="{description}">
 <title>{title}</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; line-height: 1.6; }}
@@ -219,6 +220,7 @@ async def beliefs_html(project_name: str, session: AsyncSession = Depends(get_se
     )
     html = _HTML_TEMPLATE.format(
         title=f"{project.name} — Beliefs",
+        description=f"Belief registry for {project.name} — {project.domain or 'expert knowledge base'}",
         body=nav + body,
     )
     return HTMLResponse(
@@ -244,6 +246,7 @@ async def beliefs_in_html(project_name: str, session: AsyncSession = Depends(get
     )
     html = _HTML_TEMPLATE.format(
         title=f"{project.name} — Beliefs (IN)",
+        description=f"Active beliefs for {project.name} — {project.domain or 'expert knowledge base'}",
         body=nav + body,
     )
     return HTMLResponse(
@@ -417,8 +420,10 @@ async def get_belief(
 
     prefix = f"/public/{project_name}"
     body = _belief_to_html(node_id, detail, explanation, prefix)
+    belief_text = detail.get("text", "")[:160]
     html = _HTML_TEMPLATE.format(
         title=f"{node_id} — {project.name}",
+        description=belief_text,
         body=body,
     )
     return HTMLResponse(
@@ -485,6 +490,7 @@ async def get_entry(
     body = _md_to_html(entry.content)
     html = _HTML_TEMPLATE.format(
         title=f"{entry_id} — {project.name}",
+        description=f"{entry.title or entry_id} — analysis entry for {project.name}",
         body=nav + source_links + body,
     )
     return HTMLResponse(
@@ -512,6 +518,7 @@ async def get_source(
     body = _md_to_html(source.content)
     html = _HTML_TEMPLATE.format(
         title=f"{slug} — {project.name}",
+        description=f"Source document: {slug} — {project.name}",
         body=nav + title_html + body,
     )
     return HTMLResponse(

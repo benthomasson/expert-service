@@ -3,6 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{% block description %}Expert Service — domain expert knowledge bases with belief tracking{% endblock %}">
     <title>{% block title %}Expert Service{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
@@ -20,11 +21,14 @@
         .belief-row .belief-id { font-family: monospace; font-weight: bold; }
         .belief-row .belief-source { font-size: 0.8rem; color: var(--pico-muted-color); }
         nav .brand { font-weight: bold; font-size: 1.2rem; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+        .sr-only:focus { position: static; width: auto; height: auto; padding: 0.5rem 1rem; margin: 0; overflow: visible; clip: auto; background: var(--pico-primary); color: #fff; z-index: 1000; }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
-    <nav class="container">
+    <a href="#main-content" class="sr-only">Skip to content</a>
+    <nav class="container" aria-label="Main">
         <ul><li><a href="/" class="brand">Expert Service</a></li></ul>
         <ul>
             {% if not hub_mode %}<li><a href="/projects">Projects</a></li>{% endif %}
@@ -40,7 +44,7 @@
             {% endif %}
         </ul>
     </nav>
-    <main class="container">
+    <main class="container" id="main-content">
         {% block content %}{% endblock %}
     </main>
     <footer class="container">
